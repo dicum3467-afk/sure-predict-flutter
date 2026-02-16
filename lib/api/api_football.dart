@@ -16,28 +16,16 @@ class ApiFootball {
   String _fmtDate(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  /// Fixtures pentru o zi.
-  /// Parametrii utili:
-  /// - timezone: ex. "Europe/Bucharest"
-  /// - leagueId: ex. 283 (România SuperLiga) — poate diferi în funcție de API.
-  /// - season: ex. 2025
   Future<ApiResult<List<Map<String, dynamic>>>> fixturesByDate({
     required DateTime date,
     String? timezone,
     int? leagueId,
     int? season,
   }) async {
-    if (!hasKey) {
-      return ApiResult.err('Lipsește cheia API (APIFOOTBALL_KEY).');
-    }
+    if (!hasKey) return ApiResult.err('Lipsește cheia API (APIFOOTBALL_KEY).');
 
-    final qp = <String, String>{
-      'date': _fmtDate(date),
-    };
-
-    if (timezone != null && timezone.trim().isNotEmpty) {
-      qp['timezone'] = timezone.trim();
-    }
+    final qp = <String, String>{'date': _fmtDate(date)};
+    if (timezone != null && timezone.trim().isNotEmpty) qp['timezone'] = timezone.trim();
     if (leagueId != null) qp['league'] = leagueId.toString();
     if (season != null) qp['season'] = season.toString();
 
@@ -49,7 +37,6 @@ class ApiFootball {
     }
 
     final data = json.decode(res.body) as Map<String, dynamic>;
-
     final errors = data['errors'];
     if (errors is Map && errors.isNotEmpty) {
       return ApiResult.err('API errors: $errors');
@@ -59,22 +46,27 @@ class ApiFootball {
     return ApiResult.ok(resp);
   }
 
-  /// Fixtures pentru interval: ultimele [daysBack] zile + azi.
-  /// Exemplu: daysBack=3 -> (acum-3 zile ... azi)
-  Future<ApiResult<List<Map<String, dynamic>>>> fixturesLastDays({
-    required int daysBack,
+  /// Interval custom: [start]..[end] inclusiv.
+  /// Dacă start > end, face swap automat.
+  Future<ApiResult<List<Map<String, dynamic>>>> fixturesBetween({
+    required DateTime start,
+    required DateTime end,
     String? timezone,
     int? leagueId,
     int? season,
   }) async {
-    if (!hasKey) {
-      return ApiResult.err('Lipsește cheia API (APIFOOTBALL_KEY).');
+    if (!hasKey) return ApiResult.err('Lipsește cheia API (APIFOOTBALL_KEY).');
+
+    var a = DateTime(start.year, start.month, start.day);
+    var b = DateTime(end.year, end.month, end.day);
+    if (a.isAfter(b)) {
+      final tmp = a;
+      a = b;
+      b = tmp;
     }
 
     final all = <Map<String, dynamic>>[];
-
-    for (int i = daysBack; i >= 0; i--) {
-      final d = DateTime.now().subtract(Duration(days: i));
+    for (var d = a; !d.isAfter(b); d = d.add(const Duration(days: 1))) {
       final r = await fixturesByDate(
         date: d,
         timezone: timezone,
@@ -85,21 +77,31 @@ class ApiFootball {
       all.addAll(r.data!);
     }
 
-    // sortare după kick-off
-    all.sort((a, b) {
-      final da = _fixtureDate(a);
-      final db = _fixtureDate(b);
-      return da.compareTo(db);
-    });
-
+    all.sort((x, y) => _fixtureDate(x).compareTo(_fixtureDate(y)));
     return ApiResult.ok(all);
   }
 
-  /// Predictions pentru un fixture.
+  /// Ultimele [daysBack] zile + azi.
+  /// Ex: daysBack=3 => (acum-3 zile ... azi)
+  Future<ApiResult<List<Map<String, dynamic>>>> fixturesLastDays({
+    required int daysBack,
+    String? timezone,
+    int? leagueId,
+    int? season,
+  }) async {
+    final end = DateTime.now();
+    final start = end.subtract(Duration(days: daysBack));
+    return fixturesBetween(
+      start: start,
+      end: end,
+      timezone: timezone,
+      leagueId: leagueId,
+      season: season,
+    );
+  }
+
   Future<ApiResult<Map<String, dynamic>?>> getPredictions(int fixtureId) async {
-    if (!hasKey) {
-      return ApiResult.err('Lipsește cheia API (APIFOOTBALL_KEY).');
-    }
+    if (!hasKey) return ApiResult.err('Lipsește cheia API (APIFOOTBALL_KEY).');
 
     final uri = Uri.parse('$_base/predictions').replace(queryParameters: {
       'fixture': fixtureId.toString(),
@@ -111,7 +113,6 @@ class ApiFootball {
     }
 
     final data = json.decode(res.body) as Map<String, dynamic>;
-
     final errors = data['errors'];
     if (errors is Map && errors.isNotEmpty) {
       return ApiResult.err('API errors: $errors');
@@ -119,7 +120,6 @@ class ApiFootball {
 
     final resp = (data['response'] as List);
     if (resp.isEmpty) return ApiResult.ok(null);
-
     return ApiResult.ok(resp.first as Map<String, dynamic>);
   }
 
@@ -129,16 +129,12 @@ class ApiFootball {
     return DateTime.tryParse(ds) ?? DateTime(1970);
   }
 
-  String _short(String s) {
-    if (s.length <= 240) return s;
-    return '${s.substring(0, 240)}…';
-  }
+  String _short(String s) => (s.length <= 240) ? s : '${s.substring(0, 240)}…';
 }
 
 class ApiResult<T> {
   final T? data;
   final String? error;
-
   const ApiResult._(this.data, this.error);
 
   factory ApiResult.ok(T data) => ApiResult._(data, null);

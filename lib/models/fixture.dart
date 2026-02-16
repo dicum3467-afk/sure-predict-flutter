@@ -2,12 +2,15 @@ class FixtureLite {
   final int id;
   final String home;
   final String away;
+
+  // IMPORTANT pentru Expert mode (formă + H2H)
   final int homeId;
   final int awayId;
+
   final String league;
 
-  final DateTime date;
-  final String statusShort;
+  final DateTime date; // kick-off local
+  final String statusShort; // FT, NS, 1H, HT etc.
   final int? goalsHome;
   final int? goalsAway;
 
@@ -34,15 +37,18 @@ class FixtureLite {
     final goals = (item['goals'] ?? {}) as Map<String, dynamic>;
     final status = (fixture['status'] ?? {}) as Map<String, dynamic>;
 
+    final homeTeam = teams['home'] as Map<String, dynamic>;
+    final awayTeam = teams['away'] as Map<String, dynamic>;
+
     final dateStr = (fixture['date'] ?? '').toString();
     final date = DateTime.tryParse(dateStr)?.toLocal() ?? DateTime.now();
 
     return FixtureLite(
       id: fixture['id'] as int,
-      home: (teams['home']['name'] ?? '').toString(),
-      away: (teams['away']['name'] ?? '').toString(),
-      homeId: teams['home']['id'] as int,
-      awayId: teams['away']['id'] as int,
+      home: (homeTeam['name'] ?? '').toString(),
+      away: (awayTeam['name'] ?? '').toString(),
+      homeId: homeTeam['id'] as int,
+      awayId: awayTeam['id'] as int,
       league: (league['name'] ?? '').toString(),
       date: date,
       statusShort: (status['short'] ?? '').toString(),

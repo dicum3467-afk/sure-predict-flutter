@@ -16,6 +16,13 @@ class ApiFootball {
   String _fmtDate(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+  // ---------------- FIXTURES ----------------
+
+  /// Fixtures pentru o zi.
+  /// Parametri utili:
+  /// - timezone: ex. "Europe/Bucharest"
+  /// - leagueId: ex. 283 (România SuperLiga) — poate diferi în funcție de API.
+  /// - season: ex. 2025
   Future<ApiResult<List<Map<String, dynamic>>>> fixturesByDate({
     required DateTime date,
     String? timezone,
@@ -100,6 +107,70 @@ class ApiFootball {
     );
   }
 
+  /// Ultimele N meciuri pentru o echipă (pentru formă).
+  Future<ApiResult<List<Map<String, dynamic>>>> lastFixturesForTeam({
+    required int teamId,
+    int last = 5,
+    String? timezone,
+  }) async {
+    if (!hasKey) return ApiResult.err('Lipsește cheia API (APIFOOTBALL_KEY).');
+
+    final qp = <String, String>{
+      'team': teamId.toString(),
+      'last': last.toString(),
+    };
+    if (timezone != null && timezone.trim().isNotEmpty) qp['timezone'] = timezone.trim();
+
+    final uri = Uri.parse('$_base/fixtures').replace(queryParameters: qp);
+
+    final res = await http.get(uri, headers: _headers);
+    if (res.statusCode != 200) {
+      return ApiResult.err('HTTP ${res.statusCode}: ${_short(res.body)}');
+    }
+
+    final data = json.decode(res.body) as Map<String, dynamic>;
+    final errors = data['errors'];
+    if (errors is Map && errors.isNotEmpty) {
+      return ApiResult.err('API errors: $errors');
+    }
+
+    final resp = (data['response'] as List).cast<Map<String, dynamic>>();
+    return ApiResult.ok(resp);
+  }
+
+  /// Head-to-head (ultimele N) între două echipe.
+  Future<ApiResult<List<Map<String, dynamic>>>> headToHead({
+    required int homeTeamId,
+    required int awayTeamId,
+    int last = 5,
+  }) async {
+    if (!hasKey) return ApiResult.err('Lipsește cheia API (APIFOOTBALL_KEY).');
+
+    final qp = <String, String>{
+      'h2h': '$homeTeamId-$awayTeamId',
+      'last': last.toString(),
+    };
+
+    final uri = Uri.parse('$_base/fixtures/headtohead').replace(queryParameters: qp);
+
+    final res = await http.get(uri, headers: _headers);
+    if (res.statusCode != 200) {
+      return ApiResult.err('HTTP ${res.statusCode}: ${_short(res.body)}');
+    }
+
+    final data = json.decode(res.body) as Map<String, dynamic>;
+    final errors = data['errors'];
+    if (errors is Map && errors.isNotEmpty) {
+      return ApiResult.err('API errors: $errors');
+    }
+
+    final resp = (data['response'] as List).cast<Map<String, dynamic>>();
+    return ApiResult.ok(resp);
+  }
+
+  // ---------------- PREDICTIONS ----------------
+
+  /// Predictions pentru un fixture.
   Future<ApiResult<Map<String, dynamic>?>> getPredictions(int fixtureId) async {
     if (!hasKey) return ApiResult.err('Lipsește cheia API (APIFOOTBALL_KEY).');
 
@@ -123,6 +194,8 @@ class ApiFootball {
     return ApiResult.ok(resp.first as Map<String, dynamic>);
   }
 
+  // ---------------- HELPERS ----------------
+
   DateTime _fixtureDate(Map<String, dynamic> item) {
     final fixture = (item['fixture'] ?? {}) as Map<String, dynamic>;
     final ds = (fixture['date'] ?? '').toString();
@@ -135,6 +208,7 @@ class ApiFootball {
 class ApiResult<T> {
   final T? data;
   final String? error;
+
   const ApiResult._(this.data, this.error);
 
   factory ApiResult.ok(T data) => ApiResult._(data, null);

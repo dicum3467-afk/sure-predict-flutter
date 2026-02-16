@@ -40,8 +40,10 @@ class _MatchScreenState extends State<MatchScreen> {
       error = null;
     });
 
+    // 1) Predictions
     final p = await widget.api.getPredictions(widget.fixture.id);
     if (!p.isOk) {
+      if (!mounted) return;
       setState(() {
         loading = false;
         error = p.error;
@@ -50,9 +52,22 @@ class _MatchScreenState extends State<MatchScreen> {
       return;
     }
 
-    final h = await widget.api.lastFixturesForTeam(teamId: widget.fixture.homeId, last: 5, timezone: _tz);
-    final a = await widget.api.lastFixturesForTeam(teamId: widget.fixture.awayId, last: 5, timezone: _tz);
-    final x = await widget.api.headToHead(homeTeamId: widget.fixture.homeId, awayTeamId: widget.fixture.awayId, last: 5);
+    // 2) Form + H2H (nu oprim ecranul dacă una pică, doar afișăm notă)
+    final h = await widget.api.lastFixturesForTeam(
+      teamId: widget.fixture.homeId,
+      last: 5,
+      timezone: _tz,
+    );
+    final a = await widget.api.lastFixturesForTeam(
+      teamId: widget.fixture.awayId,
+      last: 5,
+      timezone: _tz,
+    );
+    final x = await widget.api.headToHead(
+      homeTeamId: widget.fixture.homeId,
+      awayTeamId: widget.fixture.awayId,
+      last: 5,
+    );
 
     if (!mounted) return;
 
@@ -61,7 +76,7 @@ class _MatchScreenState extends State<MatchScreen> {
       homeLast = h.data ?? [];
       awayLast = a.data ?? [];
       h2h = x.data ?? [];
-      error = p.error ?? h.error ?? a.error ?? x.error; // prima eroare disponibilă
+      error = p.error ?? h.error ?? a.error ?? x.error;
       loading = false;
     });
   }
@@ -86,17 +101,21 @@ class _MatchScreenState extends State<MatchScreen> {
             const SizedBox(height: 12),
             if (loading)
               _loadingCard(t.t('loading'))
-            else if (error != null && pred == null)
-              _infoCard('Eroare API: $error')
             else if (pred == null)
-              _infoCard('Predicții indisponibile.')
+              _infoCard(error != null ? 'Eroare API: $error' : 'Predicții indisponibile.')
             else
-              ..._expertBlocks(context, pred!),
+              ..._expertBlocks(pred!),
+            if (!loading && error != null && pred != null) ...[
+              const SizedBox(height: 12),
+              _infoCard('Notă: $error'),
+            ],
           ],
         ),
       ),
     );
   }
+
+  // ---------------- UI ----------------
 
   Widget _headerCard() {
     return Card(
@@ -106,7 +125,8 @@ class _MatchScreenState extends State<MatchScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.fixture.league, style: const TextStyle(fontWeight: FontWeight.w600)),
+            Text(widget.fixture.league,
+                style: const TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 10),
             Row(
               children: [
@@ -126,10 +146,18 @@ class _MatchScreenState extends State<MatchScreen> {
   Widget _team(String name, {bool alignEnd = false}) {
     return Container(
       padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(borderRadius: BorderRadius.circular(14), border: Border.all()),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(width: 1),
+      ),
       child: Align(
         alignment: alignEnd ? Alignment.centerRight : Alignment.centerLeft,
-        child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
+        child: Text(
+          name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
       ),
     );
   }
@@ -141,7 +169,11 @@ class _MatchScreenState extends State<MatchScreen> {
         padding: const EdgeInsets.all(14),
         child: Row(
           children: [
-            const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
             const SizedBox(width: 12),
             Expanded(child: Text(msg)),
           ],
@@ -160,89 +192,6 @@ class _MatchScreenState extends State<MatchScreen> {
     );
   }
 
-  List<Widget> _expertBlocks(BuildContext context, Map<String, dynamic> root) {
-    final predictions = (root['predictions'] ?? {}) as Map<String, dynamic>;
-    final percent = (root['percent'] ?? {}) as Map<String, dynamic>;
-
-    final winner = (predictions['winner'] ?? {}) as Map<String, dynamic>;
-    final winnerName = _s(winner['name']);
-    final advice = _s(predictions['advice']);
-    final underOver = _s(predictions['under_over']);
-    final btts = _s(predictions['btts']);
-
-    final pHome = _parsePercent(_s(percent['home']));
-    final pDraw = _parsePercent(_s(percent['draw']));
-    final pAway = _parsePercent(_s(percent['away']));
-
-    final homeForm = _formSummary(homeLast, widget.fixture.homeId);
-    final awayForm = _formSummary(awayLast, widget.fixture.awayId);
-    final h2hForm = _h2hSummary(h2h, widget.fixture.homeId, widget.fixture.awayId);
-
-    final confidence = _confidenceScore(
-      pHome: pHome,
-      pDraw: pDraw,
-      pAway: pAway,
-      winnerName: winnerName,
-      homeFormPoints: homeForm.points,
-      awayFormPoints: awayForm.points,
-      h2hDelta: h2hForm.delta,
-    );
-
-    final topPick = winnerName.isNotEmpty
-        ? winnerName
-        : _maxPick(widget.fixture.home, widget.fixture.away, pHome, pDraw, pAway);
-
-    return [
-      _sectionCard(
-        title: 'Expert score',
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _bigScore(confidence),
-            const SizedBox(height: 10),
-            _metric('Top pick', topPick),
-            if (advice.isNotEmpty) _metric('Advice', advice),
-            if (underOver.isNotEmpty) _metric('O/U 2.5', underOver),
-            if (btts.isNotEmpty) _metric('BTTS', btts),
-          ],
-        ),
-      ),
-      const SizedBox(height: 12),
-      _sectionCard(
-        title: 'Probabilități 1X2 (API)',
-        child: Column(
-          children: [
-            _probRow(widget.fixture.home, pHome),
-            const SizedBox(height: 8),
-            _probRow('Egal', pDraw),
-            const SizedBox(height: 8),
-            _probRow(widget.fixture.away, pAway),
-          ],
-        ),
-      ),
-      const SizedBox(height: 12),
-      _sectionCard(
-        title: 'Formă (ultimele 5)',
-        child: Column(
-          children: [
-            _formRow(widget.fixture.home, homeForm),
-            const SizedBox(height: 10),
-            _formRow(widget.fixture.away, awayForm),
-          ],
-        ),
-      ),
-      const SizedBox(height: 12),
-      _sectionCard(
-        title: 'Head-to-head (ultimele 5)',
-        child: _h2hRow(h2hForm),
-      ),
-      if (error != null) ...[
-        const SizedBox(height: 12),
-        _infoCard('Notă: $error'),
-      ],
-    ];
-  }
-
   Widget _sectionCard({required String title, required Widget child}) {
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -251,7 +200,8 @@ class _MatchScreenState extends State<MatchScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+            Text(title,
+                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
             const SizedBox(height: 12),
             child,
           ],
@@ -260,39 +210,16 @@ class _MatchScreenState extends State<MatchScreen> {
     );
   }
 
-  Widget _bigScore(int score) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(),
-          ),
-          child: Text('$score/100', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              value: (score / 100).clamp(0.0, 1.0),
-              minHeight: 12,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _metric(String k, String v) {
+  Widget _metricRow(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
-          Expanded(child: Text(k, style: const TextStyle(fontWeight: FontWeight.w700))),
+          Expanded(
+            child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
           const SizedBox(width: 10),
-          Flexible(child: Text(v, textAlign: TextAlign.right)),
+          Flexible(child: Text(value, textAlign: TextAlign.right)),
         ],
       ),
     );
@@ -320,14 +247,139 @@ class _MatchScreenState extends State<MatchScreen> {
     );
   }
 
-  Widget _formRow(String teamName, _FormSummary f) {
+  Widget _chip(String s) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(width: 1),
+      ),
+      child: Text(s, style: const TextStyle(fontWeight: FontWeight.w700)),
+    );
+  }
+
+  Widget _bigScore(int score) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(width: 1),
+          ),
+          child: Text('$score/100',
+              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: (score / 100).clamp(0.0, 1.0),
+              minHeight: 12,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ---------------- EXPERT BLOCKS ----------------
+
+  List<Widget> _expertBlocks(Map<String, dynamic> root) {
+    final predictions = (root['predictions'] ?? {}) as Map<String, dynamic>;
+    final percent = (root['percent'] ?? {}) as Map<String, dynamic>;
+    final goals = (predictions['goals'] ?? {}) as Map<String, dynamic>;
+    final winner = (predictions['winner'] ?? {}) as Map<String, dynamic>;
+
+    final advice = _s(predictions['advice']);
+    final underOver = _s(predictions['under_over']);
+    final btts = _s(predictions['btts']);
+    final winnerName = _s(winner['name']);
+
+    final pHome = _parsePercent(_s(percent['home']));
+    final pDraw = _parsePercent(_s(percent['draw']));
+    final pAway = _parsePercent(_s(percent['away']));
+
+    final expHome = _s(goals['home']);
+    final expAway = _s(goals['away']);
+
+    final homeForm = _formSummary(homeLast, widget.fixture.homeId);
+    final awayForm = _formSummary(awayLast, widget.fixture.awayId);
+    final h2hSum = _h2hSummary(h2h, widget.fixture.homeId, widget.fixture.awayId);
+
+    final topPick = winnerName.isNotEmpty
+        ? winnerName
+        : _maxPick(widget.fixture.home, widget.fixture.away, pHome, pDraw, pAway);
+
+    final confidence = _confidenceScore(
+      pHome: pHome,
+      pDraw: pDraw,
+      pAway: pAway,
+      winnerName: winnerName,
+      homeFormPoints: homeForm.points,
+      awayFormPoints: awayForm.points,
+      h2hDelta: h2hSum.delta,
+    );
+
+    return [
+      _sectionCard(
+        title: 'Expert score',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _bigScore(confidence),
+            const SizedBox(height: 10),
+            _metricRow('Top pick', topPick),
+            if (advice.isNotEmpty) _metricRow('Advice', advice),
+            if (underOver.isNotEmpty) _metricRow('O/U 2.5', underOver),
+            if (btts.isNotEmpty) _metricRow('BTTS', btts),
+            if (expHome.isNotEmpty && expAway.isNotEmpty)
+              _metricRow('Scor estimat (xG)', '$expHome - $expAway'),
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
+      _sectionCard(
+        title: 'Probabilități 1X2 (API)',
+        child: Column(
+          children: [
+            _probRow(widget.fixture.home, pHome),
+            const SizedBox(height: 8),
+            _probRow('Egal', pDraw),
+            const SizedBox(height: 8),
+            _probRow(widget.fixture.away, pAway),
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
+      _sectionCard(
+        title: 'Formă (ultimele 5)',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _formBlock(widget.fixture.home, homeForm),
+            const SizedBox(height: 12),
+            _formBlock(widget.fixture.away, awayForm),
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
+      _sectionCard(
+        title: 'Head-to-head (ultimele 5)',
+        child: _h2hBlock(h2hSum),
+      ),
+    ];
+  }
+
+  Widget _formBlock(String team, _FormSummary f) {
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all()),
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(width: 1)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(teamName, style: const TextStyle(fontWeight: FontWeight.w900)),
+          Text(team, style: const TextStyle(fontWeight: FontWeight.w900)),
           const SizedBox(height: 8),
           Text('W-D-L: ${f.w}-${f.d}-${f.l} • Puncte: ${f.points}/15'),
           const SizedBox(height: 8),
@@ -337,10 +389,10 @@ class _MatchScreenState extends State<MatchScreen> {
     );
   }
 
-  Widget _h2hRow(_H2HSummary h) {
+  Widget _h2hBlock(_H2HSummary h) {
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all()),
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(width: 1)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -353,15 +405,7 @@ class _MatchScreenState extends State<MatchScreen> {
     );
   }
 
-  Widget _chip(String s) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(borderRadius: BorderRadius.circular(14), border: Border.all()),
-      child: Text(s, style: const TextStyle(fontWeight: FontWeight.w700)),
-    );
-  }
-
-  // ---------- EXPERT LOGIC ----------
+  // ---------------- EXPERT LOGIC ----------------
 
   _FormSummary _formSummary(List<Map<String, dynamic>> fixtures, int teamId) {
     int w = 0, d = 0, l = 0;
@@ -370,21 +414,22 @@ class _MatchScreenState extends State<MatchScreen> {
     for (final item in fixtures.take(5)) {
       final teams = (item['teams'] ?? {}) as Map<String, dynamic>;
       final goals = (item['goals'] ?? {}) as Map<String, dynamic>;
-      final status = ((item['fixture'] ?? {})['status'] ?? {}) as Map<String, dynamic>;
+      final status = (((item['fixture'] ?? {}) as Map<String, dynamic>)['status'] ?? {}) as Map<String, dynamic>;
       final short = _s(status['short']);
 
       final home = (teams['home'] ?? {}) as Map<String, dynamic>;
       final away = (teams['away'] ?? {}) as Map<String, dynamic>;
-      final homeId = home['id'];
-      final awayId = away['id'];
 
-      // only finished considered for form
+      final hid = home['id'];
+      final aid = away['id'];
+
+      // considerăm doar meciuri terminate
       if (!(short == 'FT' || short == 'AET' || short == 'PEN')) continue;
 
       final gh = goals['home'] is int ? goals['home'] as int : int.tryParse('${goals['home']}') ?? 0;
       final ga = goals['away'] is int ? goals['away'] as int : int.tryParse('${goals['away']}') ?? 0;
 
-      final isHome = homeId == teamId;
+      final isHome = hid == teamId;
       final my = isHome ? gh : ga;
       final op = isHome ? ga : gh;
 
@@ -410,7 +455,7 @@ class _MatchScreenState extends State<MatchScreen> {
     for (final item in fixtures.take(5)) {
       final teams = (item['teams'] ?? {}) as Map<String, dynamic>;
       final goals = (item['goals'] ?? {}) as Map<String, dynamic>;
-      final status = ((item['fixture'] ?? {})['status'] ?? {}) as Map<String, dynamic>;
+      final status = (((item['fixture'] ?? {}) as Map<String, dynamic>)['status'] ?? {}) as Map<String, dynamic>;
       final short = _s(status['short']);
 
       if (!(short == 'FT' || short == 'AET' || short == 'PEN')) continue;
@@ -423,13 +468,12 @@ class _MatchScreenState extends State<MatchScreen> {
       final gh = goals['home'] is int ? goals['home'] as int : int.tryParse('${goals['home']}') ?? 0;
       final ga = goals['away'] is int ? goals['away'] as int : int.tryParse('${goals['away']}') ?? 0;
 
-      // Determine which side is "our home team" for delta
+      // normalizăm ca "homeId" să fie echipa noastră de acasă din fixture
       int myHomeGoals, myAwayGoals;
       if (hid == homeId && aid == awayId) {
         myHomeGoals = gh;
         myAwayGoals = ga;
       } else if (hid == awayId && aid == homeId) {
-        // reversed
         myHomeGoals = ga;
         myAwayGoals = gh;
       } else {
@@ -441,7 +485,7 @@ class _MatchScreenState extends State<MatchScreen> {
       else draws++;
     }
 
-    final delta = (homeWins - awayWins); // simple advantage
+    final delta = homeWins - awayWins;
     return _H2HSummary(homeWins: homeWins, awayWins: awayWins, draws: draws, delta: delta);
   }
 
@@ -454,19 +498,20 @@ class _MatchScreenState extends State<MatchScreen> {
     required int awayFormPoints,
     required int h2hDelta,
   }) {
-    // Base: top probability (API)
-    final base = _safeMax(pHome, pDraw, pAway); // 0..100
-    // Form delta: each point difference -> 1.5 score (cap)
+    // Base = top probability (0..100)
+    final base = _safeMax(pHome, pDraw, pAway);
+
+    // Form delta: fiecare punct diferență -> 1.5 (cap)
     final formDelta = (homeFormPoints - awayFormPoints).clamp(-15, 15);
     final formBoost = (formDelta * 1.5).round();
-    // H2H delta: each win advantage -> 3 score (cap)
+
+    // H2H delta: fiecare win advantage -> 3 (cap)
     final h2hBoost = (h2hDelta.clamp(-5, 5) * 3);
 
-    // Winner confidence: if API returns explicit winner, add small boost
+    // winner explicit -> mic boost
     final winnerBoost = winnerName.isNotEmpty ? 5 : 0;
 
-    final score = (base + formBoost + h2hBoost + winnerBoost).clamp(0, 100);
-    return score;
+    return (base + formBoost + h2hBoost + winnerBoost).clamp(0, 100);
   }
 
   String _maxPick(String home, String away, double pHome, double pDraw, double pAway) {
@@ -491,6 +536,7 @@ class _MatchScreenState extends State<MatchScreen> {
   }
 
   String _s(dynamic v) => v == null ? '' : v.toString();
+
   double _parsePercent(String s) {
     final cleaned = s.replaceAll('%', '').trim();
     return double.tryParse(cleaned) ?? double.nan;
@@ -501,11 +547,22 @@ class _FormSummary {
   final int w, d, l;
   final int points;
   final List<String> last5;
-  _FormSummary({required this.w, required this.d, required this.l, required this.points, required this.last5});
+  _FormSummary({
+    required this.w,
+    required this.d,
+    required this.l,
+    required this.points,
+    required this.last5,
+  });
 }
 
 class _H2HSummary {
   final int homeWins, awayWins, draws;
   final int delta;
-  _H2HSummary({required this.homeWins, required this.awayWins, required this.draws, required this.delta});
+  _H2HSummary({
+    required this.homeWins,
+    required this.awayWins,
+    required this.draws,
+    required this.delta,
+  });
 }

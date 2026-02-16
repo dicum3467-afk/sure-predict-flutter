@@ -268,7 +268,7 @@ class _MatchScreenState extends State<MatchScreen> {
     ];
   }
 
-  Widget _sectionCard({required String title, required Widget child})Widget {
+  Widget _sectionCard({required String title, required Widget child}) {
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       child: Padding(

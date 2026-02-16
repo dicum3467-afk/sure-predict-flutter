@@ -4,7 +4,7 @@ import '../l10n/l10n.dart';
 import '../models/fixture.dart';
 import 'match_screen.dart';
 
-enum _Tab { today, tomorrow, romania, last3days }
+enum _Tab { today, tomorrow, romania, last3days, romaniaLast3days }
 
 class HomeScreen extends StatefulWidget {
   final void Function(Locale? locale) onChangeLanguage;
@@ -23,7 +23,10 @@ class _HomeScreenState extends State<HomeScreen> {
   _Tab tab = _Tab.today;
 
   static const _tz = 'Europe/Bucharest';
-  static const _romaniaLeagueId = 283; // SuperLiga (de obicei)
+
+  // Romania SuperLiga (Liga 1) is commonly 283 in API-Football.
+  // If your account/endpoint uses a different league id, change here.
+  static const _romaniaLeagueId = 283;
 
   @override
   void initState() {
@@ -49,11 +52,12 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         loading = false;
         fixtures = [];
-        error = 'Lipsește cheia API (APIFOOTBALL_KEY).';
+        error = 'Lipsește cheia API (APIFOOTBALL_KEY). Seteaz-o în Codemagic (Environment variables) și rebuild APK.';
       });
       return;
     }
 
+    // Ultimele 3 zile (toate ligile)
     if (tab == _Tab.last3days) {
       final res = await api.fixturesLastDays(
         daysBack: 3,
@@ -77,6 +81,32 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // România • ultimele 3 zile
+    if (tab == _Tab.romaniaLast3days) {
+      final res = await api.fixturesLastDays(
+        daysBack: 3,
+        timezone: _tz,
+        leagueId: _romaniaLeagueId,
+      );
+      if (!mounted) return;
+
+      if (!res.isOk) {
+        setState(() {
+          loading = false;
+          fixtures = [];
+          error = res.error;
+        });
+        return;
+      }
+
+      setState(() {
+        fixtures = res.data!.map(FixtureLite.fromApi).toList();
+        loading = false;
+      });
+      return;
+    }
+
+    // Azi / Mâine / România (azi)
     final date = _dateForTab(tab);
 
     final res = await api.fixturesByDate(
@@ -101,13 +131,14 @@ class _HomeScreenState extends State<HomeScreen> {
       loading = false;
     });
 
-    // fallback expert: dacă azi e gol, încearcă mâine automat
+    // Expert fallback: dacă azi e gol, încearcă mâine automat
     if (tab == _Tab.today && fixtures.isEmpty) {
       final res2 = await api.fixturesByDate(
         date: date.add(const Duration(days: 1)),
         timezone: _tz,
       );
       if (!mounted) return;
+
       if (res2.isOk) {
         final f2 = res2.data!.map(FixtureLite.fromApi).toList();
         if (f2.isNotEmpty) {
@@ -139,6 +170,9 @@ class _HomeScreenState extends State<HomeScreen> {
       case _Tab.last3days:
         title = 'Ultimele 3 zile';
         break;
+      case _Tab.romaniaLast3days:
+        title = 'România • ultimele 3 zile';
+        break;
     }
 
     return Scaffold(
@@ -156,6 +190,7 @@ class _HomeScreenState extends State<HomeScreen> {
               PopupMenuItem(value: _Tab.tomorrow, child: Text('Mâine')),
               PopupMenuItem(value: _Tab.romania, child: Text('România (SuperLiga)')),
               PopupMenuItem(value: _Tab.last3days, child: Text('Ultimele 3 zile')),
+              PopupMenuItem(value: _Tab.romaniaLast3days, child: Text('România • ultimele 3 zile')),
             ],
           ),
           PopupMenuButton<String>(
@@ -199,8 +234,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 return [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(6, 12, 6, 8),
-                    child: Text(dayTitle,
-                        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                    child: Text(
+                      dayTitle,
+                      style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+                    ),
                   ),
                   ...list.map(_fixtureCard),
                 ];
@@ -211,7 +248,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Grupare pe zi (DD.MM)
   Map<String, List<FixtureLite>> _groupByDay(List<FixtureLite> all) {
     final map = <String, List<FixtureLite>>{};
     for (final f in all) {

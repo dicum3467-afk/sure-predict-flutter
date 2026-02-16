@@ -4,7 +4,7 @@ import '../l10n/l10n.dart';
 import '../models/fixture.dart';
 import 'match_screen.dart';
 
-enum _Tab { today, tomorrow, romania }
+enum _Tab { today, tomorrow, romania, last3days }
 
 class HomeScreen extends StatefulWidget {
   final void Function(Locale? locale) onChangeLanguage;
@@ -23,10 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
   _Tab tab = _Tab.today;
 
   static const _tz = 'Europe/Bucharest';
-
-  // NOTE: API-Football league id for Romania SuperLiga is commonly 283.
-  // If in contul tău apare alt ID, îl schimbăm aici.
-  static const _romaniaLeagueId = 283;
+  static const _romaniaLeagueId = 283; // SuperLiga (de obicei)
 
   @override
   void initState() {
@@ -39,7 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime _dateForTab(_Tab t) {
     final now = DateTime.now();
     if (t == _Tab.tomorrow) return now.add(const Duration(days: 1));
-    return now; // today + romania use "today"
+    return now;
   }
 
   Future<void> _load() async {
@@ -48,13 +45,44 @@ class _HomeScreenState extends State<HomeScreen> {
       error = null;
     });
 
+    if (!api.hasKey) {
+      setState(() {
+        loading = false;
+        fixtures = [];
+        error = 'Lipsește cheia API (APIFOOTBALL_KEY).';
+      });
+      return;
+    }
+
+    if (tab == _Tab.last3days) {
+      final res = await api.fixturesLastDays(
+        daysBack: 3,
+        timezone: _tz,
+      );
+      if (!mounted) return;
+
+      if (!res.isOk) {
+        setState(() {
+          loading = false;
+          fixtures = [];
+          error = res.error;
+        });
+        return;
+      }
+
+      setState(() {
+        fixtures = res.data!.map(FixtureLite.fromApi).toList();
+        loading = false;
+      });
+      return;
+    }
+
     final date = _dateForTab(tab);
 
     final res = await api.fixturesByDate(
       date: date,
       timezone: _tz,
       leagueId: tab == _Tab.romania ? _romaniaLeagueId : null,
-      // season: DateTime.now().year, // opțional, dacă vrei strict sezonul
     );
 
     if (!mounted) return;
@@ -68,19 +96,20 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final raw = res.data!;
     setState(() {
-      fixtures = raw.map(FixtureLite.fromApi).toList();
+      fixtures = res.data!.map(FixtureLite.fromApi).toList();
       loading = false;
     });
 
-    // Expert fallback: dacă azi e gol, încearcă automat mâine (doar pentru tab today)
+    // fallback expert: dacă azi e gol, încearcă mâine automat
     if (tab == _Tab.today && fixtures.isEmpty) {
-      final res2 = await api.fixturesByDate(date: date.add(const Duration(days: 1)), timezone: _tz);
+      final res2 = await api.fixturesByDate(
+        date: date.add(const Duration(days: 1)),
+        timezone: _tz,
+      );
       if (!mounted) return;
       if (res2.isOk) {
-        final raw2 = res2.data!;
-        final f2 = raw2.map(FixtureLite.fromApi).toList();
+        final f2 = res2.data!.map(FixtureLite.fromApi).toList();
         if (f2.isNotEmpty) {
           setState(() {
             tab = _Tab.tomorrow;
@@ -107,6 +136,9 @@ class _HomeScreenState extends State<HomeScreen> {
       case _Tab.romania:
         title = 'România • SuperLiga';
         break;
+      case _Tab.last3days:
+        title = 'Ultimele 3 zile';
+        break;
     }
 
     return Scaffold(
@@ -123,6 +155,7 @@ class _HomeScreenState extends State<HomeScreen> {
               PopupMenuItem(value: _Tab.today, child: Text('Azi')),
               PopupMenuItem(value: _Tab.tomorrow, child: Text('Mâine')),
               PopupMenuItem(value: _Tab.romania, child: Text('România (SuperLiga)')),
+              PopupMenuItem(value: _Tab.last3days, child: Text('Ultimele 3 zile')),
             ],
           ),
           PopupMenuButton<String>(
@@ -145,13 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ListView(
           padding: const EdgeInsets.all(12),
           children: [
-            if (!api.hasKey)
-              _warnCard(
-                'Cheie API lipsă',
-                'În Codemagic → Environment variables setează APIFOOTBALL_KEY (Secret), apoi rebuild APK.',
-              ),
-            if (error != null)
-              _warnCard('Eroare API', error!),
+            if (error != null) _warnCard('Info', error!),
             if (loading)
               Center(
                 child: Padding(
@@ -165,28 +192,76 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Center(child: Text('Nu s-au găsit meciuri pentru selecția curentă.')),
               )
             else
-              ...fixtures.map((f) => Card(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: ListTile(
-                      title: Text('${f.home} vs ${f.away}',
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
-                      subtitle: Text(f.league),
-                      trailing: const Icon(Icons.analytics_outlined),
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => MatchScreen(api: api, fixture: f),
-                          ),
-                        );
-                      },
-                    ),
-                  )),
+              ..._groupByDay(fixtures).entries.expand((entry) {
+                final dayTitle = entry.key;
+                final list = entry.value;
+
+                return [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 12, 6, 8),
+                    child: Text(dayTitle,
+                        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                  ),
+                  ...list.map(_fixtureCard),
+                ];
+              }).toList(),
           ],
         ),
       ),
+    );
+  }
+
+  // Grupare pe zi (DD.MM)
+  Map<String, List<FixtureLite>> _groupByDay(List<FixtureLite> all) {
+    final map = <String, List<FixtureLite>>{};
+    for (final f in all) {
+      final d = f.date;
+      final key =
+          '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
+      (map[key] ??= []).add(f);
+    }
+    return map;
+  }
+
+  Widget _fixtureCard(FixtureLite f) {
+    final score = (f.goalsHome != null && f.goalsAway != null)
+        ? '${f.goalsHome}-${f.goalsAway}'
+        : '—';
+
+    final statusBadge = f.isFinished
+        ? 'FT'
+        : f.isLive
+            ? f.statusShort
+            : 'NS';
+
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: ListTile(
+        title: Text('${f.home} vs ${f.away}',
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text(f.league),
+        leading: _statusPill(statusBadge),
+        trailing: Text(score, style: const TextStyle(fontWeight: FontWeight.w800)),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => MatchScreen(api: api, fixture: f),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _statusPill(String s) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(width: 1),
+      ),
+      child: Text(s, style: const TextStyle(fontWeight: FontWeight.w800)),
     );
   }
 

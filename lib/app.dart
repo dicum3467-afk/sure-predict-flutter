@@ -5,13 +5,19 @@ import 'screens/home_screen.dart';
 
 class SurePredictApp extends StatefulWidget {
   const SurePredictApp({super.key});
+
   @override
   State<SurePredictApp> createState() => _SurePredictAppState();
 }
 
 class _SurePredictAppState extends State<SurePredictApp> {
   Locale? _locale;
-  void _setLocale(Locale? locale) => setState(() => _locale = locale);
+
+  void _setLocale(Locale? locale) {
+    setState(() {
+      _locale = locale;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -19,7 +25,10 @@ class _SurePredictAppState extends State<SurePredictApp> {
       title: 'Sure Predict',
       debugShowCheckedModeBanner: false,
       locale: _locale,
-      supportedLocales: const [Locale('ro'), Locale('en')],
+      supportedLocales: const [
+        Locale('ro'),
+        Locale('en'),
+      ],
       localizationsDelegates: const [
         AppL10n.delegate,
         GlobalMaterialLocalizations.delegate,
@@ -31,7 +40,9 @@ class _SurePredictAppState extends State<SurePredictApp> {
         useMaterial3: true,
         colorSchemeSeed: const Color(0xFF00FF9C),
       ),
-      home: HomeScreen(onChangeLanguage: _setLocale),
+      home: HomeScreen(
+        onChangeLanguage: _setLocale,
+      ),
     );
   }
 }

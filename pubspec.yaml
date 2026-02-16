@@ -14,8 +14,12 @@ dependencies:
   intl: any
   http: ^1.2.2
 
-flutter:
+  flutter:
+  generate: true
   uses-material-design: true
   assets:
     - lib/l10n/app_ro.arb
     - lib/l10n/app_en.arb
+  
+    
+ 

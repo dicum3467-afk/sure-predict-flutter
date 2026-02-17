@@ -114,7 +114,6 @@ class ApiFootball {
     return ApiResult.ok(combined);
   }
 
-  /// RAW predictions object (dacă vrei debug)
   Future<ApiResult<Map<String, dynamic>>> getPredictionsRaw(int fixtureId) async {
     final res = await _get('/predictions', query: {'fixture': fixtureId.toString()});
     if (!res.isOk) return ApiResult.err(res.error, statusCode: res.statusCode);
@@ -129,7 +128,6 @@ class ApiFootball {
     return ApiResult.err('Predictions not available', statusCode: res.statusCode);
   }
 
-  /// PredictionLite (1/X/2 + advice + confidence)
   Future<ApiResult<PredictionLite>> getPredictionLite(int fixtureId) async {
     final raw = await getPredictionsRaw(fixtureId);
     if (!raw.isOk || raw.data == null) return ApiResult.err(raw.error, statusCode: raw.statusCode);
@@ -143,53 +141,5 @@ class ApiFootball {
     } catch (e) {
       return ApiResult.err('Prediction parse error: $e', statusCode: raw.statusCode);
     }
-  }
-
-  /// H2H - păstrat dacă îl folosești în alte servicii
-  Future<ApiResult<List<Map<String, dynamic>>>> headToHead({
-    required int homeTeamId,
-    required int awayTeamId,
-    int last = 5,
-  }) async {
-    final res = await _get('/fixtures/headtohead', query: {
-      'h2h': '$homeTeamId-$awayTeamId',
-      'last': last.toString(),
-    });
-    if (!res.isOk) return ApiResult.err(res.error, statusCode: res.statusCode);
-
-    final root = res.data!;
-    final resp = root['response'];
-    if (resp is! List) return const ApiResult.ok(<Map<String, dynamic>>[]);
-
-    final out = <Map<String, dynamic>>[];
-    for (final x in resp) {
-      if (x is Map<String, dynamic>) out.add(x);
-      if (x is Map) out.add(x.cast<String, dynamic>());
-    }
-    return ApiResult.ok(out, statusCode: res.statusCode);
-  }
-
-  Future<ApiResult<List<Map<String, dynamic>>>> lastFixturesForTeam({
-    required int teamId,
-    int last = 8,
-    String timezone = 'Europe/Bucharest',
-  }) async {
-    final res = await _get('/fixtures', query: {
-      'team': teamId.toString(),
-      'last': last.toString(),
-      'timezone': timezone,
-    });
-    if (!res.isOk) return ApiResult.err(res.error, statusCode: res.statusCode);
-
-    final root = res.data!;
-    final resp = root['response'];
-    if (resp is! List) return const ApiResult.ok(<Map<String, dynamic>>[]);
-
-    final out = <Map<String, dynamic>>[];
-    for (final x in resp) {
-      if (x is Map<String, dynamic>) out.add(x);
-      if (x is Map) out.add(x.cast<String, dynamic>());
-    }
-    return ApiResult.ok(out, statusCode: res.statusCode);
   }
 }

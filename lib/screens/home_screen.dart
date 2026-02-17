@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api/api_football.dart';
 import '../l10n/l10n.dart';
 import '../models/fixture.dart';
+import '../services/prediction_cache.dart';
 import 'match_screen.dart';
 
 enum _Tab { today, tomorrow, romania, last3days, romaniaLast3days }
@@ -16,6 +17,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final ApiFootball api;
+  late final PredictionCache predCache;
 
   bool loading = true;
   String? error;
@@ -30,6 +32,7 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     const key = String.fromEnvironment('APIFOOTBALL_KEY');
     api = ApiFootball(key);
+    predCache = PredictionCache(api: api, maxConcurrent: 2);
     _load();
   }
 
@@ -45,6 +48,8 @@ class _HomeScreenState extends State<HomeScreen> {
       error = null;
     });
 
+    predCache.clear();
+
     if (!api.hasKey) {
       setState(() {
         loading = false;
@@ -55,7 +60,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // Ultimele 3 zile (toate ligile)
     if (tab == _Tab.last3days) {
       final res = await api.fixturesLastDays(daysBack: 3, timezone: _tz);
       if (!mounted) return;
@@ -76,7 +80,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // România • ultimele 3 zile
     if (tab == _Tab.romaniaLast3days) {
       final res = await api.fixturesLastDays(
         daysBack: 3,
@@ -101,7 +104,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // Azi / Mâine / România (azi)
     final date = _dateForTab(tab);
 
     final res = await api.fixturesByDate(
@@ -126,7 +128,6 @@ class _HomeScreenState extends State<HomeScreen> {
       loading = false;
     });
 
-    // fallback: dacă azi e gol, încearcă mâine
     if (tab == _Tab.today && fixtures.isEmpty) {
       final res2 = await api.fixturesByDate(
         date: date.add(const Duration(days: 1)),
@@ -234,7 +235,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
                     ),
                   ),
-                  ...list.map(_fixtureCard),
+                  ...list.map((f) => _fixtureCardWithPrediction(context, f)),
                 ];
               }).toList(),
           ],
@@ -253,7 +254,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return map;
   }
 
-  Widget _fixtureCard(FixtureLite f) {
+  Widget _fixtureCardWithPrediction(BuildContext context, FixtureLite f) {
     final score = (f.goalsHome != null && f.goalsAway != null)
         ? '${f.goalsHome}-${f.goalsAway}'
         : '—';
@@ -266,12 +267,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: ListTile(
-        title: Text('${f.home} vs ${f.away}',
-            style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Text(f.league),
-        leading: _statusPill(statusBadge),
-        trailing: Text(score, style: const TextStyle(fontWeight: FontWeight.w800)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
         onTap: () {
           Navigator.push(
             context,
@@ -280,7 +277,135 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           );
         },
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _statusPill(statusBadge),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text('${f.home} vs ${f.away}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(score, style: const TextStyle(fontWeight: FontWeight.w900)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(f.league, maxLines: 1, overflow: TextOverflow.ellipsis),
+
+              const SizedBox(height: 10),
+
+              // Predicție lazy + cache
+              FutureBuilder<PredictionLite?>(
+                future: predCache.getForFixture(f),
+                builder: (context, snap) {
+                  final p = snap.data ?? predCache.peek(f.id);
+
+                  if (p == null) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return Row(
+                        children: const [
+                          SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          SizedBox(width: 10),
+                          Text('Predicții...'),
+                        ],
+                      );
+                    }
+                    return const Text('Predicții indisponibile');
+                  }
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          _predChip(p.topPick),
+                          const SizedBox(width: 8),
+                          Text('Confidence ${p.confidence}%',
+                              style: const TextStyle(fontWeight: FontWeight.w800)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      _miniBar(
+                        leftLabel: '1',
+                        midLabel: 'X',
+                        rightLabel: '2',
+                        pLeft: p.pHome,
+                        pMid: p.pDraw,
+                        pRight: p.pAway,
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
       ),
+    );
+  }
+
+  Widget _miniBar({
+    required String leftLabel,
+    required String midLabel,
+    required String rightLabel,
+    required double pLeft,
+    required double pMid,
+    required double pRight,
+  }) {
+    String pct(double v) => '${(v * 100).toStringAsFixed(0)}%';
+
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: Row(
+            children: [
+              Expanded(
+                flex: (pLeft * 1000).round().clamp(1, 1000),
+                child: const SizedBox(height: 10, child: DecoratedBox(decoration: BoxDecoration())),
+              ),
+              Expanded(
+                flex: (pMid * 1000).round().clamp(1, 1000),
+                child: const SizedBox(height: 10, child: DecoratedBox(decoration: BoxDecoration())),
+              ),
+              Expanded(
+                flex: (pRight * 1000).round().clamp(1, 1000),
+                child: const SizedBox(height: 10, child: DecoratedBox(decoration: BoxDecoration())),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(child: Text('$leftLabel ${pct(pLeft)}', style: const TextStyle(fontWeight: FontWeight.w700))),
+            Expanded(child: Text('$midLabel ${pct(pMid)}', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w700))),
+            Expanded(child: Text('$rightLabel ${pct(pRight)}', textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700))),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _predChip(String pick) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(width: 1),
+      ),
+      child: Text(pick, style: const TextStyle(fontWeight: FontWeight.w900)),
     );
   }
 

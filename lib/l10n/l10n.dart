@@ -1,4 +1,3 @@
-// lib/l10n/l10n.dart
 import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -7,12 +6,12 @@ class AppL10n {
   final Locale locale;
   AppL10n(this.locale);
 
+  static const LocalizationsDelegate<AppL10n> delegate = _AppL10nDelegate();
+
   static const supportedLocales = <Locale>[
     Locale('ro'),
     Locale('en'),
   ];
-
-  static const LocalizationsDelegate<AppL10n> delegate = _AppL10nDelegate();
 
   static AppL10n of(BuildContext context) {
     final l10n = Localizations.of<AppL10n>(context, AppL10n);
@@ -23,7 +22,6 @@ class AppL10n {
 
   Future<void> load() async {
     final code = locale.languageCode;
-    // IMPORTANT: tu ai assets în lib/l10n/*.arb, așa că încărcăm de acolo
     final raw = await rootBundle.loadString('lib/l10n/app_$code.arb');
     final map = (json.decode(raw) as Map<String, dynamic>);
     _strings = map.map((k, v) => MapEntry(k, v.toString()));
@@ -36,7 +34,7 @@ class _AppL10nDelegate extends LocalizationsDelegate<AppL10n> {
   const _AppL10nDelegate();
 
   @override
-  bool isSupported(Locale locale) => const ['ro', 'en'].contains(locale.languageCode);
+  bool isSupported(Locale locale) => locale.languageCode == 'ro' || locale.languageCode == 'en';
 
   @override
   Future<AppL10n> load(Locale locale) async {

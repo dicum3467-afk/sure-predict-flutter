@@ -10,12 +10,12 @@ class PredictionLite {
   final double pAway; // 0..1
 
   final double pBttsYes; // 0..1
-  final double pOver25; // 0..1
+  final double pOver25;  // 0..1
 
-  final int confidence; // 0..100
-  final String topPick; // "1", "X", "2"
-  final String label; // ex: "1 • 67%"
-  final String extras; // ex: "BTTS 54% • O2.5 48%"
+  final int confidence;  // 0..100
+  final String topPick;  // "1", "X", "2"
+  final String label;    // ex: "1 • 67%"
+  final String extras;   // ex: "BTTS 54% • O2.5 48%"
 
   const PredictionLite({
     required this.pHome,
@@ -30,7 +30,7 @@ class PredictionLite {
   });
 }
 
-/// Cache + throttle pentru predicții pe listă (AI 2.0, fără /predictions).
+/// Cache + throttle pentru predicții pe listă (AI 2.0 + Smart Confidence).
 class PredictionCache {
   final ApiFootball api;
   final int maxConcurrent;
@@ -101,7 +101,6 @@ class PredictionCache {
     });
   }
 
-  // ✅ AI 2.0 SAFE: nu mai returnează null când lipsesc datele
   Future<PredictionLite?> _runAi(FixtureLite f) async {
     if (!api.hasKey) return null;
 
@@ -112,74 +111,81 @@ class PredictionCache {
     List<Map<String, dynamic>> h2hData = const [];
 
     try {
-      final homeLast = await api.lastFixturesForTeam(
-        teamId: f.homeId,
-        last: 8,
-        timezone: tz,
-      );
+      final homeLast = await api.lastFixturesForTeam(teamId: f.homeId, last: 8, timezone: tz);
       if (homeLast.isOk && homeLast.data != null) homeData = homeLast.data!;
     } catch (_) {}
 
     try {
-      final awayLast = await api.lastFixturesForTeam(
-        teamId: f.awayId,
-        last: 8,
-        timezone: tz,
-      );
+      final awayLast = await api.lastFixturesForTeam(teamId: f.awayId, last: 8, timezone: tz);
       if (awayLast.isOk && awayLast.data != null) awayData = awayLast.data!;
     } catch (_) {}
 
     try {
-      final h2h = await api.headToHead(
-        homeTeamId: f.homeId,
-        awayTeamId: f.awayId,
-        last: 5,
-      );
+      final h2h = await api.headToHead(homeTeamId: f.homeId, awayTeamId: f.awayId, last: 5);
       if (h2h.isOk && h2h.data != null) h2hData = h2h.data!;
     } catch (_) {}
 
     // Baseline neutru dacă nu avem date
     final hStats = homeData.isNotEmpty
         ? _teamStats(homeData, f.homeId)
-        : _TeamStats(counted: 0, ppg: 1.35, gfPerGame: 1.25, gaPerGame: 1.25);
+        : _TeamStats(counted: 0, ppg: 1.35, gfPerGame: 1.25, gaPerGame: 1.25, trend: 0.0);
 
     final aStats = awayData.isNotEmpty
         ? _teamStats(awayData, f.awayId)
-        : _TeamStats(counted: 0, ppg: 1.35, gfPerGame: 1.25, gaPerGame: 1.25);
+        : _TeamStats(counted: 0, ppg: 1.35, gfPerGame: 1.25, gaPerGame: 1.25, trend: 0.0);
 
     final h2hDelta = h2hData.isNotEmpty ? _h2hDelta(h2hData, f.homeId, f.awayId) : 0;
 
-    // ----- MODEL: așteptări goluri (Poisson)
+    // --- MODEL: lambda Poisson
     const homeAdv = 0.12;
+
+    // forma: PPG 0..3 => -0.12..+0.12
     final formBoost = (hStats.ppg - aStats.ppg).clamp(-3.0, 3.0) * 0.04;
+
+    // trend: -1..+1 => -0.06..+0.06 (ultimele vs primele meciuri)
+    final trendBoost = (hStats.trend - aStats.trend).clamp(-1.0, 1.0) * 0.06;
+
+    // H2H: -3..+3 => -0.06..+0.06
     final h2hBoost = (h2hDelta.clamp(-3, 3)) * 0.02;
 
     double lambdaHome =
-        (0.55 * hStats.gfPerGame + 0.45 * aStats.gaPerGame) + homeAdv + formBoost + h2hBoost;
+        (0.55 * hStats.gfPerGame + 0.45 * aStats.gaPerGame) + homeAdv + formBoost + trendBoost + h2hBoost;
     double lambdaAway =
-        (0.55 * aStats.gfPerGame + 0.45 * hStats.gaPerGame) - homeAdv - formBoost - h2hBoost;
+        (0.55 * aStats.gfPerGame + 0.45 * hStats.gaPerGame) - homeAdv - formBoost - trendBoost - h2hBoost;
 
     lambdaHome = lambdaHome.clamp(0.2, 3.2);
     lambdaAway = lambdaAway.clamp(0.2, 3.2);
 
-    // ----- 1X2
+    // --- 1X2
     final probs = _matchProbsFromPoisson(lambdaHome, lambdaAway, maxGoals: 6);
     final pHome = probs.$1;
     final pDraw = probs.$2;
     final pAway = probs.$3;
 
-    final top = _topPick(pHome, pDraw, pAway);
+    final topPick = _topPick(pHome, pDraw, pAway);
     final topVal = max(pHome, max(pDraw, pAway));
     final second = _secondBest(pHome, pDraw, pAway);
     final margin = (topVal - second).clamp(0.0, 1.0);
 
-    // ----- BTTS & Over 2.5
+    // --- BTTS & O2.5
     final pBttsYes = _pBttsYes(lambdaHome, lambdaAway);
     final pOver25 = _pOver25(lambdaHome, lambdaAway);
 
-    // Confidence: scade dacă avem puține meciuri reale
-    final dataQ = ((hStats.counted + aStats.counted) / 16.0).clamp(0.25, 1.0);
-    final conf = (38 + (topVal * 45) + (margin * 35) + (dataQ * 12)).round().clamp(0, 100);
+    // --- SMART CONFIDENCE (real)
+    final conf = _smartConfidence(
+      pHome: pHome,
+      pDraw: pDraw,
+      pAway: pAway,
+      lambdaHome: lambdaHome,
+      lambdaAway: lambdaAway,
+      hStats: hStats,
+      aStats: aStats,
+      h2hDelta: h2hDelta,
+      homeAdv: homeAdv,
+      margin: margin,
+      topVal: topVal,
+      hasH2h: h2hData.isNotEmpty,
+    );
 
     final extras =
         'BTTS ${(pBttsYes * 100).toStringAsFixed(0)}% • O2.5 ${(pOver25 * 100).toStringAsFixed(0)}%';
@@ -191,10 +197,95 @@ class PredictionCache {
       pBttsYes: pBttsYes,
       pOver25: pOver25,
       confidence: conf,
-      topPick: top,
-      label: '$top • $conf%',
+      topPick: topPick,
+      label: '$topPick • $conf%',
       extras: extras,
     );
+  }
+
+  // ---------------- SMART CONFIDENCE ----------------
+
+  int _smartConfidence({
+    required double pHome,
+    required double pDraw,
+    required double pAway,
+    required double lambdaHome,
+    required double lambdaAway,
+    required _TeamStats hStats,
+    required _TeamStats aStats,
+    required int h2hDelta,
+    required double homeAdv,
+    required double margin,
+    required double topVal,
+    required bool hasH2h,
+  }) {
+    // 1) Claritatea pick-ului (prob + margine)
+    // topVal: 0.33..0.70 => contribuție mare
+    final clarity = (topVal * 55) + (margin * 45); // 0..~80
+
+    // 2) Puterea formei: diferență PPG + trend
+    final ppgDiff = (hStats.ppg - aStats.ppg).clamp(-3.0, 3.0); // -3..+3
+    final formScore = (ppgDiff.abs() / 3.0) * 16;               // 0..16
+
+    final trendDiff = (hStats.trend - aStats.trend).clamp(-1.0, 1.0);
+    final trendScore = (trendDiff.abs()) * 10;                  // 0..10
+
+    // 3) Atac vs apărare (diferență netă GF-GA)
+    final hNet = (hStats.gfPerGame - hStats.gaPerGame).clamp(-3.0, 3.0);
+    final aNet = (aStats.gfPerGame - aStats.gaPerGame).clamp(-3.0, 3.0);
+    final netDiff = (hNet - aNet).clamp(-3.0, 3.0);
+    final netScore = (netDiff.abs() / 3.0) * 12;                // 0..12
+
+    // 4) Echilibru goluri așteptate: dacă e foarte dezechilibrat, crește încrederea
+    final goalEdge = (lambdaHome - lambdaAway).abs().clamp(0.0, 2.0);
+    final goalEdgeScore = (goalEdge / 2.0) * 10;                // 0..10
+
+    // 5) H2H (dacă există)
+    final h2hScore = hasH2h ? (h2hDelta.abs().clamp(0, 3) / 3.0) * 6 : 0.0; // 0..6
+
+    // 6) Calitatea datelor (câte meciuri validate)
+    final dataCount = hStats.counted + aStats.counted; // 0..16
+    final dataQuality = (dataCount / 16.0).clamp(0.25, 1.0); // 0.25..1
+    final dataScore = dataQuality * 12; // 3..12
+
+    // 7) Penalizări: dacă e prea “coinflip” (aproape 33/33/33)
+    final entropyPenalty = _entropyPenalty(pHome, pDraw, pAway); // 0..12
+
+    // 8) Home advantage mic, dar constant (ajută doar dacă pick-ul e 1)
+    final homeAdvScore = homeAdv * 10; // ~1.2
+
+    double raw =
+        18 +
+        clarity +
+        formScore +
+        trendScore +
+        netScore +
+        goalEdgeScore +
+        h2hScore +
+        dataScore +
+        homeAdvScore -
+        entropyPenalty;
+
+    // Normalizează: raw cam 20..120
+    // Țintim 40..92 realist; clamp final 0..100
+    int conf = raw.round().clamp(35, 94);
+
+    // dacă datele sunt foarte puține, plafonăm
+    if (dataCount <= 4) conf = min(conf, 72);
+    if (dataCount == 0) conf = min(conf, 66);
+
+    return conf;
+  }
+
+  double _entropyPenalty(double a, double b, double c) {
+    // penalizează distribuții uniforme
+    // H = -Σ p log p ; maxim la uniform
+    double h(double p) => p <= 0 ? 0 : -p * log(p);
+    final H = h(a) + h(b) + h(c);
+    // uniform (1/3) => H ~ 1.0986
+    // penalizare 0..12
+    final norm = ((H - 0.7) / (1.0986 - 0.7)).clamp(0.0, 1.0);
+    return norm * 12;
   }
 
   // -------------------- helpers --------------------
@@ -265,8 +356,16 @@ class PredictionCache {
     int gf = 0;
     int ga = 0;
 
+    // pentru trend: primele 4 vs ultimele 4
+    int pointsFirst = 0, gamesFirst = 0;
+    int pointsLast = 0, gamesLast = 0;
+
+    // fixtures vin de obicei descrescător (cele mai recente primele)
+    // ca să fie consistent, extragem până la 8 meciuri valide și apoi calculăm trend pe ordine cronologică
+    final valid = <_MiniResult>[];
+
     for (final item in fixtures) {
-      if (counted >= 8) break;
+      if (valid.length >= 8) break;
 
       final fixture = (item['fixture'] ?? {}) as Map<String, dynamic>;
       final status = (fixture['status'] ?? {}) as Map<String, dynamic>;
@@ -285,13 +384,34 @@ class PredictionCache {
       final my = isHome ? gh : gA;
       final op = isHome ? gA : gh;
 
-      gf += my;
-      ga += op;
+      int pts = 0;
+      if (my > op) pts = 3;
+      else if (my == op) pts = 1;
 
-      if (my > op) points += 3;
-      else if (my == op) points += 1;
+      valid.add(_MiniResult(gf: my, ga: op, pts: pts));
+    }
 
+    // calcul global
+    for (final r in valid) {
+      gf += r.gf;
+      ga += r.ga;
+      points += r.pts;
       counted++;
+    }
+
+    // trend: comparăm PPG primele 4 (mai vechi) vs ultimele 4 (mai noi)
+    // valid e “mai noi primele” => inversăm pentru cronologic
+    final chrono = valid.reversed.toList();
+
+    for (int i = 0; i < chrono.length; i++) {
+      final r = chrono[i];
+      if (i < 4) {
+        pointsFirst += r.pts;
+        gamesFirst++;
+      } else {
+        pointsLast += r.pts;
+        gamesLast++;
+      }
     }
 
     final games = max(counted, 1);
@@ -299,11 +419,18 @@ class PredictionCache {
     final gfpg = gf / games;
     final gapg = ga / games;
 
+    final ppgFirst = gamesFirst == 0 ? ppg : pointsFirst / gamesFirst;
+    final ppgLast = gamesLast == 0 ? ppg : pointsLast / gamesLast;
+
+    // trend: -1..+1 (dacă PPG crește mult, trend pozitiv)
+    final trend = ((ppgLast - ppgFirst) / 3.0).clamp(-1.0, 1.0);
+
     return _TeamStats(
       counted: counted,
       ppg: ppg,
       gfPerGame: gfpg,
       gaPerGame: gapg,
+      trend: trend,
     );
   }
 
@@ -350,17 +477,26 @@ class PredictionCache {
   }
 }
 
+class _MiniResult {
+  final int gf;
+  final int ga;
+  final int pts;
+  _MiniResult({required this.gf, required this.ga, required this.pts});
+}
+
 class _TeamStats {
   final int counted;
   final double ppg;
   final double gfPerGame;
   final double gaPerGame;
+  final double trend; // -1..+1
 
   _TeamStats({
     required this.counted,
     required this.ppg,
     required this.gfPerGame,
     required this.gaPerGame,
+    required this.trend,
   });
 }
 

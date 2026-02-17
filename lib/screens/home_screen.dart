@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import '../api/api_football.dart';
+import '../l10n/l10n.dart';
 import '../models/fixture.dart';
 import '../services/prediction_cache.dart';
+import 'match_screen.dart';
+
+enum _Tab { today, tomorrow, romania, last3days, romaniaLast3days }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final void Function(Locale? locale) onChangeLanguage;
+  const HomeScreen({super.key, required this.onChangeLanguage});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -12,187 +17,336 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final ApiFootball api;
-  late final PredictionCache predictionCache;
+  late final PredictionCache predCache;
 
   bool loading = true;
   String? error;
   List<FixtureLite> fixtures = [];
+  _Tab tab = _Tab.today;
+
+  static const _tz = 'Europe/Bucharest';
+  static const _romaniaLeagueId = 283;
 
   @override
   void initState() {
     super.initState();
-
-    const apiKey = String.fromEnvironment('APIFOOTBALL_KEY');
-
-    api = ApiFootball(apiKey);
-    predictionCache = PredictionCache(api: api);
-
-    _loadToday();
+    const key = String.fromEnvironment('APIFOOTBALL_KEY');
+    api = ApiFootball(key);
+    predCache = PredictionCache(api: api, maxConcurrent: 2);
+    _load();
   }
 
-  Future<void> _loadToday() async {
+  DateTime _dateForTab(_Tab t) {
+    final now = DateTime.now();
+    if (t == _Tab.tomorrow) return now.add(const Duration(days: 1));
+    return now;
+  }
+
+  Future<void> _load() async {
     setState(() {
       loading = true;
       error = null;
     });
 
-    try {
-      final today = DateTime.now();
-      final res = await api.fixturesByDate(today);
+    predCache.clear();
+
+    if (!api.hasKey) {
+      setState(() {
+        loading = false;
+        fixtures = [];
+        error =
+            'Lipsește cheia API (APIFOOTBALL_KEY). Seteaz-o în Codemagic (Environment variables) și rebuild APK.';
+      });
+      return;
+    }
+
+    // Ultimele 3 zile (toate ligile)
+    if (tab == _Tab.last3days) {
+      final res = await api.fixturesLastDays(daysBack: 3, timezone: _tz);
+      if (!mounted) return;
 
       if (!res.isOk) {
         setState(() {
-          error = res.error;
           loading = false;
+          fixtures = [];
+          error = res.error;
         });
         return;
       }
 
       setState(() {
-        fixtures = res.data ?? [];
+        fixtures = (res.data ?? []).map(FixtureLite.fromApi).toList();
         loading = false;
       });
-    } catch (e) {
+      return;
+    }
+
+    // România • ultimele 3 zile
+    if (tab == _Tab.romaniaLast3days) {
+      final res = await api.fixturesLastDays(
+        daysBack: 3,
+        timezone: _tz,
+        leagueId: _romaniaLeagueId,
+      );
+      if (!mounted) return;
+
+      if (!res.isOk) {
+        setState(() {
+          loading = false;
+          fixtures = [];
+          error = res.error;
+        });
+        return;
+      }
+
       setState(() {
-        error = e.toString();
+        fixtures = (res.data ?? []).map(FixtureLite.fromApi).toList();
         loading = false;
       });
+      return;
+    }
+
+    // Azi / Mâine / România (după dată)
+    final date = _dateForTab(tab);
+
+    final res = await api.fixturesByDate(
+      date: date,
+      timezone: _tz,
+      leagueId: tab == _Tab.romania ? _romaniaLeagueId : null,
+    );
+
+    if (!mounted) return;
+
+    if (!res.isOk) {
+      setState(() {
+        loading = false;
+        fixtures = [];
+        error = res.error;
+      });
+      return;
+    }
+
+    setState(() {
+      fixtures = (res.data ?? []).map(FixtureLite.fromApi).toList();
+      loading = false;
+    });
+
+    // fallback: dacă azi e gol, încearcă mâine
+    if (tab == _Tab.today && fixtures.isEmpty) {
+      final res2 = await api.fixturesByDate(
+        date: date.add(const Duration(days: 1)),
+        timezone: _tz,
+      );
+      if (!mounted) return;
+
+      if (res2.isOk) {
+        final f2 = (res2.data ?? []).map(FixtureLite.fromApi).toList();
+        if (f2.isNotEmpty) {
+          setState(() {
+            tab = _Tab.tomorrow;
+            fixtures = f2;
+            error = null;
+          });
+        }
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    const debugKey = String.fromEnvironment('APIFOOTBALL_KEY');
+    final t = AppL10n.of(context);
+
+    String title;
+    switch (tab) {
+      case _Tab.today:
+        title = t.t('todayMatches');
+        break;
+      case _Tab.tomorrow:
+        title = 'Meciuri mâine';
+        break;
+      case _Tab.romania:
+        title = 'România • SuperLiga';
+        break;
+      case _Tab.last3days:
+        title = 'Ultimele 3 zile';
+        break;
+      case _Tab.romaniaLast3days:
+        title = 'România • ultimele 3 zile';
+        break;
+    }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F1B17),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0F1B17),
-        title: const Text('Meciuri azi'),
+        title: Text(title),
+        actions: [
+          PopupMenuButton<_Tab>(
+            icon: const Icon(Icons.tune),
+            onSelected: (v) {
+              setState(() => tab = v);
+              _load();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: _Tab.today, child: Text('Azi')),
+              PopupMenuItem(value: _Tab.tomorrow, child: Text('Mâine')),
+              PopupMenuItem(value: _Tab.romania, child: Text('România (SuperLiga)')),
+              PopupMenuItem(value: _Tab.last3days, child: Text('Ultimele 3 zile')),
+              PopupMenuItem(value: _Tab.romaniaLast3days, child: Text('România • ultimele 3 zile')),
+            ],
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.language),
+            onSelected: (v) {
+              if (v == 'ro') widget.onChangeLanguage(const Locale('ro'));
+              if (v == 'en') widget.onChangeLanguage(const Locale('en'));
+              if (v == 'sys') widget.onChangeLanguage(null);
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'ro', child: Text('Română')),
+              PopupMenuItem(value: 'en', child: Text('English')),
+              PopupMenuItem(value: 'sys', child: Text('System')),
+            ],
+          ),
+        ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: loading
-            ? const Center(child: CircularProgressIndicator())
-            : error != null
-                ? _errorCard(error!)
-                : fixtures.isEmpty
-                    ? const Text('Nu sunt meciuri azi.')
-                    : ListView(
-                        children: [
-                          _debugCard(debugKey),
-                          const SizedBox(height: 16),
-                          ...fixtures.map(_fixtureCard),
-                        ],
-                      ),
-      ),
-    );
-  }
-
-  // ---------------- UI ----------------
-
-  Widget _debugCard(String key) {
-    return Card(
-      color: const Color(0xFF1C2A25),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text(
-          'DEBUG KEY: ${key.isEmpty ? "EMPTY" : key.substring(0, 4)}',
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-      ),
-    );
-  }
-
-  Widget _errorCard(String message) {
-    return Card(
-      color: const Color(0xFF1C2A25),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text(
-          message,
-          style: const TextStyle(color: Colors.red),
-        ),
-      ),
-    );
-  }
-
-  Widget _fixtureCard(FixtureLite f) {
-    return Card(
-      color: const Color(0xFF1C2A25),
-      margin: const EdgeInsets.only(bottom: 16),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          padding: const EdgeInsets.all(12),
           children: [
-            Text(
-              '${f.home} vs ${f.away}',
-              style: const TextStyle(
-                  fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-            const SizedBox(height: 4),
-            Text(f.leagueName),
-            const SizedBox(height: 12),
-            FutureBuilder<PredictionLite?>(
-              future: predictionCache.getForFixture(f),
-              builder: (context, snap) {
-                if (!snap.hasData) {
-                  return const Text('Calcul AI...');
-                }
-
-                final p = snap.data!;
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        _predChip(p.topPick),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Confidence ${p.confidence}%',
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w800),
-                        ),
-                      ],
+            if (error != null) _infoCard('Info', error!),
+            if (loading)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 40),
+                  child: Text(t.t('loading')),
+                ),
+              )
+            else if (fixtures.isEmpty && error == null)
+              const Padding(
+                padding: EdgeInsets.only(top: 40),
+                child: Center(child: Text('Nu s-au găsit meciuri pentru selecția curentă.')),
+              )
+            else
+              ..._groupByDay(fixtures).entries.expand((entry) {
+                final dayTitle = entry.key;
+                final list = entry.value;
+                return [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 12, 6, 8),
+                    child: Text(
+                      dayTitle,
+                      style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
                     ),
-                    const SizedBox(height: 8),
-                    _miniBar(
-                      leftLabel: '1',
-                      midLabel: 'X',
-                      rightLabel: '2',
-                      pLeft: p.pHome,
-                      pMid: p.pDraw,
-                      pRight: p.pAway,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      p.extras,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w700),
-                    ),
-                  ],
-                );
-              },
-            ),
+                  ),
+                  ...list.map((f) => _fixtureCardWithPrediction(context, f)),
+                ];
+              }).toList(),
           ],
         ),
       ),
     );
   }
 
-  Widget _predChip(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-          horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.green,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-            fontWeight: FontWeight.bold, color: Colors.white),
+  Map<String, List<FixtureLite>> _groupByDay(List<FixtureLite> all) {
+    final map = <String, List<FixtureLite>>{};
+    for (final f in all) {
+      final d = f.date;
+      final key = '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
+      (map[key] ??= []).add(f);
+    }
+    return map;
+  }
+
+  Widget _fixtureCardWithPrediction(BuildContext context, FixtureLite f) {
+    final score = (f.goalsHome != null && f.goalsAway != null) ? '${f.goalsHome}-${f.goalsAway}' : '—';
+
+    final statusBadge = f.isFinished
+        ? 'FT'
+        : f.isLive
+            ? f.statusShort
+            : 'NS';
+
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => MatchScreen(api: api, fixture: f)),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _statusPill(statusBadge),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '${f.home} vs ${f.away}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(score, style: const TextStyle(fontWeight: FontWeight.w900)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(f.league, maxLines: 1, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 10),
+
+              FutureBuilder<PredictionLite?>(
+                future: predCache.getForFixture(f),
+                builder: (context, snap) {
+                  final p = snap.data ?? predCache.peek(f.id);
+
+                  if (p == null) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return Row(
+                        children: const [
+                          SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                          SizedBox(width: 10),
+                          Text('Calcul AI...'),
+                        ],
+                      );
+                    }
+                    return const Text('Predicții indisponibile');
+                  }
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          _predChip(p.topPick),
+                          const SizedBox(width: 8),
+                          Text('Confidence ${p.confidence}%', style: const TextStyle(fontWeight: FontWeight.w800)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      _miniBar(
+                        leftLabel: '1',
+                        midLabel: 'X',
+                        rightLabel: '2',
+                        pLeft: p.pHome,
+                        pMid: p.pDraw,
+                        pRight: p.pAway,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(p.extras, style: const TextStyle(fontWeight: FontWeight.w700)),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -205,49 +359,81 @@ class _HomeScreenState extends State<HomeScreen> {
     required double pMid,
     required double pRight,
   }) {
-    final total = pLeft + pMid + pRight;
-    final l = total > 0 ? pLeft / total : 0.33;
-    final m = total > 0 ? pMid / total : 0.34;
-    final r = total > 0 ? pRight / total : 0.33;
+    String pct(double v) => '${(v * 100).toStringAsFixed(0)}%';
+
+    // culori din theme (fără hardcode agresiv)
+    final c1 = Theme.of(context).colorScheme.primary;
+    final cX = Theme.of(context).colorScheme.secondary;
+    final c2 = Theme.of(context).colorScheme.tertiary;
+
+    int flex(double v) => (v * 1000).round().clamp(1, 1000);
 
     return Column(
       children: [
-        Row(
-          children: [
-            Expanded(
-              flex: (l * 100).round(),
-              child: Container(
-                height: 8,
-                color: Colors.green,
-              ),
-            ),
-            Expanded(
-              flex: (m * 100).round(),
-              child: Container(
-                height: 8,
-                color: Colors.orange,
-              ),
-            ),
-            Expanded(
-              flex: (r * 100).round(),
-              child: Container(
-                height: 8,
-                color: Colors.red,
-              ),
-            ),
-          ],
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: Row(
+            children: [
+              Expanded(flex: flex(pLeft), child: Container(height: 10, color: c1)),
+              Expanded(flex: flex(pMid), child: Container(height: 10, color: cX)),
+              Expanded(flex: flex(pRight), child: Container(height: 10, color: c2)),
+            ],
+          ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 6),
         Row(
-          mainAxisAlignment:
-              MainAxisAlignment.spaceBetween,
           children: [
-            Text('$leftLabel ${(pLeft * 100).toStringAsFixed(0)}%'),
-            Text('$midLabel ${(pMid * 100).toStringAsFixed(0)}%'),
-            Text('$rightLabel ${(pRight * 100).toStringAsFixed(0)}%'),
+            Expanded(child: Text('$leftLabel ${pct(pLeft)}', style: const TextStyle(fontWeight: FontWeight.w700))),
+            Expanded(
+              child: Text('$midLabel ${pct(pMid)}',
+                  textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
+            Expanded(
+              child: Text('$rightLabel ${pct(pRight)}',
+                  textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
           ],
         ),
       ],
+    );
+  }
+
+  Widget _predChip(String pick) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(width: 1),
+      ),
+      child: Text(pick, style: const TextStyle(fontWeight: FontWeight.w900)),
+    );
+  }
+
+  Widget _statusPill(String s) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(width: 1),
+      ),
+      child: Text(s, style: const TextStyle(fontWeight: FontWeight.w800)),
+    );
+  }
+
+  Widget _infoCard(String title, String msg) {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+            Text(msg),
+          ],
+        ),
+      ),
     );
   }
 }

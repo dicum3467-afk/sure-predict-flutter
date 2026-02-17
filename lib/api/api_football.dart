@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/fixture.dart';
+import '../models/prediction_lite.dart';
 
 class ApiResult<T> {
   final T? data;
@@ -17,8 +18,6 @@ class ApiResult<T> {
 class ApiFootball {
   final String apiKey;
   final http.Client _client;
-
-  /// API-SPORTS Football endpoint (v3)
   final String baseUrl;
 
   ApiFootball({
@@ -27,7 +26,6 @@ class ApiFootball {
     this.baseUrl = 'https://v3.football.api-sports.io',
   }) : _client = client ?? http.Client();
 
-  /// Helper: citește din --dart-define=APIFOOTBALL_KEY=...
   factory ApiFootball.fromDartDefine({String baseUrl = 'https://v3.football.api-sports.io'}) {
     const k = String.fromEnvironment('APIFOOTBALL_KEY');
     return ApiFootball(apiKey: k, baseUrl: baseUrl);
@@ -59,13 +57,10 @@ class ApiFootball {
         return ApiResult.err('Invalid JSON response', statusCode: code);
       }
 
-      // API-SPORTS structure: { get, parameters, errors, results, paging, response }
       final errors = decoded['errors'];
       if (code < 200 || code >= 300) {
         return ApiResult.err('HTTP $code: ${json.encode(errors ?? decoded)}', statusCode: code);
       }
-
-      // uneori întoarce errors.token etc chiar cu 200; tratăm:
       if (errors is Map && errors.isNotEmpty) {
         return ApiResult.err('API errors: ${json.encode(errors)}', statusCode: code);
       }
@@ -76,7 +71,6 @@ class ApiFootball {
     }
   }
 
-  /// Fixtures pentru o zi (IMPORTANT: DateTime, nu String)
   Future<ApiResult<List<FixtureLite>>> fixturesByDate({
     required DateTime date,
     String timezone = 'Europe/Bucharest',
@@ -93,16 +87,12 @@ class ApiFootball {
 
     final out = <FixtureLite>[];
     for (final item in resp) {
-      if (item is Map<String, dynamic>) {
-        out.add(FixtureLite.fromApiFootball(item));
-      } else if (item is Map) {
-        out.add(FixtureLite.fromApiFootball(item.cast<String, dynamic>()));
-      }
+      if (item is Map<String, dynamic>) out.add(FixtureLite.fromApiFootball(item));
+      if (item is Map) out.add(FixtureLite.fromApiFootball(item.cast<String, dynamic>()));
     }
     return ApiResult.ok(out, statusCode: res.statusCode);
   }
 
-  /// Fixtures între două date (inclusiv), cu limită externă impusă de UI (ex: 7 zile)
   Future<ApiResult<List<FixtureLite>>> fixturesBetween({
     required DateTime start,
     required DateTime end,
@@ -110,10 +100,7 @@ class ApiFootball {
   }) async {
     final s = DateTime(start.year, start.month, start.day);
     final e = DateTime(end.year, end.month, end.day);
-
-    if (e.isBefore(s)) {
-      return const ApiResult.err('Invalid range: end < start');
-    }
+    if (e.isBefore(s)) return const ApiResult.err('Invalid range: end < start');
 
     final days = e.difference(s).inDays + 1;
     final combined = <FixtureLite>[];
@@ -124,15 +111,12 @@ class ApiFootball {
       if (!r.isOk) return ApiResult.err(r.error, statusCode: r.statusCode);
       combined.addAll(r.data ?? const <FixtureLite>[]);
     }
-
     return ApiResult.ok(combined);
   }
 
-  /// Predictions pentru un fixture id
-  Future<ApiResult<Map<String, dynamic>>> getPredictions(int fixtureId) async {
-    final res = await _get('/predictions', query: {
-      'fixture': fixtureId.toString(),
-    });
+  /// RAW predictions object (dacă vrei debug)
+  Future<ApiResult<Map<String, dynamic>>> getPredictionsRaw(int fixtureId) async {
+    final res = await _get('/predictions', query: {'fixture': fixtureId.toString()});
     if (!res.isOk) return ApiResult.err(res.error, statusCode: res.statusCode);
 
     final root = res.data!;
@@ -145,7 +129,23 @@ class ApiFootball {
     return ApiResult.err('Predictions not available', statusCode: res.statusCode);
   }
 
-  /// H2H - folosit de prediction_cache.dart (ca să nu mai crape build-ul)
+  /// PredictionLite (1/X/2 + advice + confidence)
+  Future<ApiResult<PredictionLite>> getPredictionLite(int fixtureId) async {
+    final raw = await getPredictionsRaw(fixtureId);
+    if (!raw.isOk || raw.data == null) return ApiResult.err(raw.error, statusCode: raw.statusCode);
+
+    try {
+      final p = PredictionLite.fromApiFootballPrediction(
+        fixtureId: fixtureId,
+        obj: raw.data!,
+      );
+      return ApiResult.ok(p, statusCode: raw.statusCode);
+    } catch (e) {
+      return ApiResult.err('Prediction parse error: $e', statusCode: raw.statusCode);
+    }
+  }
+
+  /// H2H - păstrat dacă îl folosești în alte servicii
   Future<ApiResult<List<Map<String, dynamic>>>> headToHead({
     required int homeTeamId,
     required int awayTeamId,
@@ -169,7 +169,6 @@ class ApiFootball {
     return ApiResult.ok(out, statusCode: res.statusCode);
   }
 
-  /// Ultimele meciuri pentru o echipă - folosit de prediction_cache.dart
   Future<ApiResult<List<Map<String, dynamic>>>> lastFixturesForTeam({
     required int teamId,
     int last = 8,

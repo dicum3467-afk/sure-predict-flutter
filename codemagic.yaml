@@ -4,8 +4,8 @@ workflows:
     max_build_duration: 60
 
     environment:
-      groups:
-        - default
+      variables:
+        APIFOOTBALL_KEY: $APIFOOTBALL_KEY
 
     triggering:
       events:

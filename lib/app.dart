@@ -9,23 +9,33 @@ class SurePredictApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final base = ThemeData(
+      useMaterial3: true,
+      brightness: Brightness.dark,
+    );
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Sure Predict',
-      theme: ThemeData.dark(useMaterial3: true),
-
+      theme: base.copyWith(
+        scaffoldBackgroundColor: const Color(0xFF070A12),
+        colorScheme: base.colorScheme.copyWith(
+          primary: const Color(0xFFB7A6FF),
+          secondary: const Color(0xFF6EE7FF),
+          surface: const Color(0xFF0D1220),
+        ),
+        textTheme: base.textTheme.apply(
+          bodyColor: Colors.white,
+          displayColor: Colors.white,
+        ),
+      ),
       localizationsDelegates: const [
         AppL10n.delegate,
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-
-      supportedLocales: const [
-        Locale('ro'),
-        Locale('en'),
-      ],
-
+      supportedLocales: AppL10n.supportedLocales,
       home: const HomeScreen(),
     );
   }

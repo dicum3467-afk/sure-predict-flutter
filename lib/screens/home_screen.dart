@@ -17,9 +17,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   late final ApiFootball api;
 
-  // DEBUG: verificăm dacă dart-define intră în APK
-  static const _key = String.fromEnvironment('APIFOOTBALL_KEY');
-
   bool loading = true;
   String? error;
   List<FixtureLite> fixtures = [];
@@ -211,20 +208,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ListView(
           padding: const EdgeInsets.all(12),
           children: [
-            // DEBUG CARD (după ce merge, îl ștergem)
-            Card(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Text(
-                  'DEBUG KEY: ${_key.isEmpty ? "EMPTY" : _key.substring(0, 4)}',
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-              ),
-            ),
-
             if (error != null) _warnCard('Info', error!),
-
             if (loading)
               Center(
                 child: Padding(

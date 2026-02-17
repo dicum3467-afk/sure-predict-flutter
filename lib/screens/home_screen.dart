@@ -7,15 +7,14 @@ import '../models/fixture.dart';
 import '../services/prediction_cache.dart';
 import 'match_screen.dart';
 
+enum _ViewMode { singleDay, range }
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
-
-/// Mod de afișare: o singură zi sau interval
-enum _ViewMode { singleDay, range }
 
 class _HomeScreenState extends State<HomeScreen> {
   late final ApiFootball api;
@@ -25,17 +24,17 @@ class _HomeScreenState extends State<HomeScreen> {
   String? errorText;
   List<FixtureLite> fixtures = const [];
 
-  // Filtre
+  // Filters
   bool romaniaOnly = false;
 
-  // UI: mod + selecții
+  // Mode
   _ViewMode viewMode = _ViewMode.singleDay;
 
-  /// pentru single day
-  int dayOffset = 0; // 0=today, 1=tomorrow, -1=yesterday etc.
+  // Single day mode
+  int dayOffset = 0; // 0=today
 
-  /// pentru range
-  int rangeDays = 7; // 3/7/14
+  // Range mode
+  int rangeDays = 7;           // user selection (3/7/14) but auto-clamped
   bool includePast = true;
   bool includeFuture = true;
 
@@ -44,12 +43,65 @@ class _HomeScreenState extends State<HomeScreen> {
   String? topError;
   List<_TopItem> top10 = const [];
 
+  static const int _maxRangeDays = 7; // ✅ LIMITA AUTOMATĂ
+
   @override
   void initState() {
     super.initState();
     api = ApiFootball.fromDartDefine();
     predCache = PredictionCache(api: api);
     _load();
+  }
+
+  int _clampedRangeDays(int d) => d.clamp(1, _maxRangeDays);
+
+  void _setRangeDays(int d) {
+    final clamped = _clampedRangeDays(d);
+    if (clamped != d) {
+      // inform user (non-blocking)
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Limită automată: maxim 7 zile pentru interval.')),
+        );
+      });
+    }
+    setState(() => rangeDays = clamped);
+    _load();
+  }
+
+  Future<List<FixtureLite>> _fixturesByDateSafe(DateTime date, String tz) async {
+    final dynamic result = await api.fixturesByDate(date: date, timezone: tz);
+
+    // Case 1: already List<FixtureLite>
+    if (result is List<FixtureLite>) return result;
+
+    // Case 2: List<Map>
+    if (result is List) {
+      if (result.isEmpty) return <FixtureLite>[];
+      if (result.first is Map) {
+        return result
+            .map((e) => FixtureLite.fromApiFootball((e as Map).cast<String, dynamic>()))
+            .toList();
+      }
+    }
+
+    // Case 3: ApiResult<List<Map>>
+    // We'll try to read .data dynamically.
+    try {
+      final data = result.data;
+      if (data is List) {
+        if (data.isEmpty) return <FixtureLite>[];
+        if (data.first is Map) {
+          return data
+              .map((e) => FixtureLite.fromApiFootball((e as Map).cast<String, dynamic>()))
+              .toList();
+        }
+      }
+    } catch (_) {}
+
+    // fallback
+    return <FixtureLite>[];
   }
 
   Future<void> _load() async {
@@ -72,42 +124,42 @@ class _HomeScreenState extends State<HomeScreen> {
       List<FixtureLite> res;
 
       if (viewMode == _ViewMode.singleDay) {
-        // o singură zi: azi / mâine / ieri etc
         final date = now.add(Duration(days: dayOffset));
-        res = await api.fixturesByDate(date: date, timezone: tz);
+        res = await _fixturesByDateSafe(date, tz);
       } else {
-        // interval: N zile pe trecut + azi + N zile pe viitor (configurabil)
-        final days = <DateTime>[];
+        // ✅ rangeDays auto-clamped to max 7
+        final d = _clampedRangeDays(rangeDays);
 
-        // includem trecutul
+        final days = <DateTime>[];
         if (includePast) {
-          for (int i = rangeDays; i >= 1; i--) {
+          for (int i = d; i >= 1; i--) {
             days.add(now.subtract(Duration(days: i)));
           }
         }
-
-        // includem azi mereu în range mode (mai clar pt user)
         days.add(now);
-
-        // includem viitorul
         if (includeFuture) {
-          for (int i = 1; i <= rangeDays; i++) {
+          for (int i = 1; i <= d; i++) {
             days.add(now.add(Duration(days: i)));
           }
         }
 
-        // fetch pe zile (securizat: API-ul tău acceptă DateTime)
         final combined = <FixtureLite>[];
-        for (final d in days) {
-          final list = await api.fixturesByDate(date: d, timezone: tz);
+        for (final day in days) {
+          final list = await _fixturesByDateSafe(day, tz);
           combined.addAll(list);
         }
 
-        res = combined;
+        // Optional: remove duplicates by fixture id
+        final seen = <int>{};
+        res = combined.where((f) => seen.add(f.id)).toList();
       }
 
       if (romaniaOnly) {
-        res = res.where((f) => (f.league ?? '').toLowerCase().contains('romania')).toList();
+        res = res.where((f) {
+          final s = (f.country ?? '').toLowerCase();
+          final l = (f.league ?? '').toLowerCase();
+          return s.contains('romania') || l.contains('romania') || l.contains('liga');
+        }).toList();
       }
 
       setState(() {
@@ -126,6 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _buildTop10() async {
     if (!mounted) return;
+
     if (fixtures.isEmpty) {
       setState(() {
         top10 = const [];
@@ -144,7 +197,6 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final items = <_TopItem>[];
 
-      // calc pred pentru toate meciurile (PredictionCache limitează concurența)
       for (final f in fixtures) {
         final p = await predCache.getForFixture(f);
         if (!mounted) return;
@@ -256,16 +308,17 @@ class _HomeScreenState extends State<HomeScreen> {
   String _singleTitle(AppL10n t) {
     if (dayOffset == 0) return t.t('matches_today');
     if (dayOffset == 1) return t.t('matches_tomorrow');
-    if (dayOffset == -1) return t.t('matches_yesterday');
+    if (dayOffset == -1) return t.t('matches_yesterday'); // dacă nu există în l10n, va afișa fallback-ul din l10n-ul tău
     if (dayOffset > 1) return 'Ziua +$dayOffset';
     return 'Ziua $dayOffset';
   }
 
   String _rangeLabel() {
+    final d = _clampedRangeDays(rangeDays);
     final parts = <String>[];
-    if (includePast) parts.add('-$rangeDays');
+    if (includePast) parts.add('-$d');
     parts.add('0');
-    if (includeFuture) parts.add('+$rangeDays');
+    if (includeFuture) parts.add('+$d');
     return parts.join(' .. ');
   }
 
@@ -297,7 +350,6 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Mode switch
           Row(
             children: [
               ChoiceChip(
@@ -314,6 +366,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 selected: viewMode == _ViewMode.range,
                 onSelected: (_) {
                   setState(() => viewMode = _ViewMode.range);
+                  // auto clamp instant
+                  rangeDays = _clampedRangeDays(rangeDays);
                   _load();
                 },
               ),
@@ -322,8 +376,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
           const SizedBox(height: 10),
-
-          if (viewMode == _ViewMode.singleDay) _singleDayChips(t) else _rangeChips(),
+          if (viewMode == _ViewMode.singleDay) _singleDayChips(t) else _rangeControls(),
         ],
       ),
     );
@@ -358,17 +411,16 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _rangeChips() {
+  Widget _rangeControls() {
+    final d = _clampedRangeDays(rangeDays);
+
     Widget chip(String label, bool selected, int newDays) {
       return Padding(
         padding: const EdgeInsets.only(right: 8),
         child: ChoiceChip(
           label: Text(label),
           selected: selected,
-          onSelected: (_) {
-            setState(() => rangeDays = newDays);
-            _load();
-          },
+          onSelected: (_) => _setRangeDays(newDays), // ✅ clamp + snackbar
         ),
       );
     }
@@ -377,9 +429,9 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         Row(
           children: [
-            chip('±3 zile', rangeDays == 3, 3),
-            chip('±7 zile', rangeDays == 7, 7),
-            chip('±14 zile', rangeDays == 14, 14),
+            chip('±3 zile', d == 3, 3),
+            chip('±7 zile', d == 7, 7),
+            chip('±14 zile', rangeDays == 14, 14), // va fi clamped la 7
             const Spacer(),
           ],
         ),
@@ -438,9 +490,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return RefreshIndicator(
-      onRefresh: () async {
-        await _load();
-      },
+      onRefresh: _load,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
         itemCount: top10.length + 1,
@@ -450,8 +500,10 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.only(bottom: 10),
               child: Row(
                 children: [
-                  Text('Top 10 • sortat după Confidence',
-                      style: TextStyle(fontWeight: FontWeight.w900, color: Colors.white.withOpacity(0.85))),
+                  Text(
+                    'Top 10 • sortat după Confidence',
+                    style: TextStyle(fontWeight: FontWeight.w900, color: Colors.white.withOpacity(0.85)),
+                  ),
                   const Spacer(),
                   IconButton(onPressed: _buildTop10, icon: const Icon(Icons.replay)),
                 ],
@@ -470,9 +522,7 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.only(bottom: 12),
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
-        onTap: () {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => MatchScreen(api: api, fixture: f)));
-        },
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MatchScreen(api: api, fixture: f))),
         child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
@@ -484,7 +534,7 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Row(
                 children: [
-                  _statusPill(f.statusShort ?? 'NS'),
+                  _statusPill(f.statusSafe()),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -549,9 +599,7 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.only(bottom: 12),
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
-        onTap: () {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => MatchScreen(api: api, fixture: f)));
-        },
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MatchScreen(api: api, fixture: f))),
         child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),

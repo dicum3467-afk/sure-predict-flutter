@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../api/api_football.dart';
@@ -26,10 +27,14 @@ class _HomeScreenState extends State<HomeScreen> {
   String? errorText;
   List<FixtureLite> fixtures = const [];
 
+  // PRO: Best Picks
+  bool showBestOnly = false; // dacă true -> afișează doar top picks
+  final int bestLimit = 10;
+
   @override
   void initState() {
     super.initState();
-    api = ApiFootball.fromDartDefine(); // trebuie să existe în clasa ta ApiFootball
+    api = ApiFootball.fromDartDefine();
     predCache = PredictionCache(api: api);
     _load();
   }
@@ -57,15 +62,12 @@ class _HomeScreenState extends State<HomeScreen> {
       } else if (mode == _RangeMode.tomorrow) {
         res = await api.fixturesByDate(date: _ymd(now.add(const Duration(days: 1))), timezone: tz);
       } else {
-        // ultimele 3 zile (inclusiv azi): [now-2 .. now]
         final start = _ymd(now.subtract(const Duration(days: 2)));
         final end = _ymd(now);
         res = await api.fixturesBetween(start: start, end: end, timezone: tz);
       }
 
       if (romaniaOnly) {
-        // în funcție de modelul tău, filtrează după country/league
-        // aici filtrăm după textul ligii (safe)
         res = res.where((f) => (f.league ?? '').toLowerCase().contains('romania')).toList();
       }
 
@@ -100,6 +102,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onPressed: () {
                       setState(() {
                         romaniaOnly = false;
+                        showBestOnly = false;
                       });
                       Navigator.pop(context);
                       _load();
@@ -108,7 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 value: romaniaOnly,
@@ -119,6 +122,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
                 title: Text(t.t('romania_only')),
                 subtitle: Text(t.t('romania_only_hint')),
+              ),
+              const SizedBox(height: 6),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: showBestOnly,
+                onChanged: (v) {
+                  setState(() => showBestOnly = v);
+                  Navigator.pop(context);
+                },
+                title: const Text('Best picks only'),
+                subtitle: const Text('Arată doar cele mai bune predicții (Top 10).'),
               ),
             ],
           ),
@@ -148,38 +162,25 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: Text(title),
         actions: [
-          IconButton(
-            tooltip: t.t('filters'),
-            onPressed: _openFilters,
-            icon: const Icon(Icons.tune),
-          ),
-          IconButton(
-            tooltip: t.t('reload'),
-            onPressed: _load,
-            icon: const Icon(Icons.refresh),
-          ),
+          IconButton(tooltip: t.t('filters'), onPressed: _openFilters, icon: const Icon(Icons.tune)),
+          IconButton(tooltip: t.t('reload'), onPressed: _load, icon: const Icon(Icons.refresh)),
         ],
       ),
       body: loading
           ? Center(child: Text(t.t('loading')))
           : errorText != null
-              ? Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: _infoCard('Info', errorText!),
-                )
+              ? Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', errorText!))
               : fixtures.isEmpty
-                  ? Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: _infoCard('Info', t.t('no_matches')),
-                    )
+                  ? Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', t.t('no_matches')))
                   : RefreshIndicator(
                       onRefresh: _load,
                       child: ListView.builder(
                         padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-                        itemCount: fixtures.length + 1,
+                        itemCount: fixtures.length + 2,
                         itemBuilder: (context, i) {
                           if (i == 0) return _rangeChips(t);
-                          final f = fixtures[i - 1];
+                          if (i == 1) return _proHeader(t);
+                          final f = fixtures[i - 2];
                           return _fixtureCard(context, t, f);
                         },
                       ),
@@ -187,15 +188,32 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _proHeader(AppL10n t) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'PRO • Smart Confidence',
+              style: TextStyle(fontWeight: FontWeight.w900, color: Colors.white.withOpacity(0.85)),
+            ),
+          ),
+          FilterChip(
+            label: const Text('Best picks'),
+            selected: showBestOnly,
+            onSelected: (v) => setState(() => showBestOnly = v),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _rangeChips(AppL10n t) {
     Widget chip(String label, bool selected, VoidCallback onTap) {
       return Padding(
         padding: const EdgeInsets.only(right: 8),
-        child: ChoiceChip(
-          label: Text(label),
-          selected: selected,
-          onSelected: (_) => onTap(),
-        ),
+        child: ChoiceChip(label: Text(label), selected: selected, onSelected: (_) => onTap()),
       );
     }
 
@@ -217,11 +235,7 @@ class _HomeScreenState extends State<HomeScreen> {
               setState(() => mode = _RangeMode.last3);
               _load();
             }),
-            if (romaniaOnly)
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: Chip(label: Text(t.t('romania_only'))),
-              ),
+            if (romaniaOnly) Padding(padding: const EdgeInsets.only(left: 6), child: Chip(label: Text(t.t('romania_only')))),
           ],
         ),
       ),
@@ -236,9 +250,7 @@ class _HomeScreenState extends State<HomeScreen> {
         onTap: () {
           Navigator.push(
             context,
-            MaterialPageRoute(
-              builder: (_) => MatchScreen(api: api, fixture: f),
-            ),
+            MaterialPageRoute(builder: (_) => MatchScreen(api: api, fixture: f)),
           );
         },
         child: Container(
@@ -250,7 +262,6 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // header row
               Row(
                 children: [
                   _statusPill(f.statusShort ?? 'NS'),
@@ -264,20 +275,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Text(
-                    _scoreText(f),
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                  ),
+                  Text(_scoreText(f), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                 ],
               ),
               const SizedBox(height: 8),
-
               if ((f.league ?? '').isNotEmpty)
-                Text(
-                  f.league!,
-                  style: TextStyle(color: Colors.white.withOpacity(0.70)),
-                ),
-
+                Text(f.league!, style: TextStyle(color: Colors.white.withOpacity(0.70))),
               const SizedBox(height: 10),
 
               FutureBuilder<PredictionLite?>(
@@ -287,11 +290,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     return Text(t.t('loading'));
                   }
                   final p = snap.data;
+
                   if (p == null) {
-                    return Text(
-                      t.t('predictions_unavailable'),
-                      style: TextStyle(color: Colors.white.withOpacity(0.70)),
-                    );
+                    if (showBestOnly) return const SizedBox.shrink();
+                    return Text(t.t('predictions_unavailable'), style: TextStyle(color: Colors.white.withOpacity(0.70)));
+                  }
+
+                  // PRO: Best picks filter (Top by confidence)
+                  if (showBestOnly) {
+                    // simplu: ascunde predicțiile sub 70%
+                    if (p.confidence < 70) return const SizedBox.shrink();
                   }
 
                   return Column(
@@ -302,9 +310,15 @@ class _HomeScreenState extends State<HomeScreen> {
                           _pickPill(p.topPick),
                           const SizedBox(width: 10),
                           Expanded(
-                            child: Text(
-                              'Confidence ${p.confidence}% (${p.sourceTag})',
-                              style: const TextStyle(fontWeight: FontWeight.w900),
+                            child: Row(
+                              children: [
+                                Text(
+                                  'Confidence ${p.confidence}%',
+                                  style: const TextStyle(fontWeight: FontWeight.w900),
+                                ),
+                                const SizedBox(width: 8),
+                                _sourceBadge(p.sourceTag), // DATA/BASE badge colorat
+                              ],
                             ),
                           ),
                         ],
@@ -312,10 +326,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 10),
                       _probBar(p.pHome, p.pDraw, p.pAway),
                       const SizedBox(height: 6),
-                      Text(
-                        p.extras,
-                        style: TextStyle(color: Colors.white.withOpacity(0.70)),
-                      ),
+                      Text(p.extras, style: TextStyle(color: Colors.white.withOpacity(0.70))),
                     ],
                   );
                 },
@@ -323,6 +334,25 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _sourceBadge(String tag) {
+    final isData = tag.toUpperCase() == 'DATA';
+    final bg = isData ? Colors.green.withOpacity(0.22) : Colors.white.withOpacity(0.10);
+    final fg = isData ? Colors.greenAccent : Colors.white.withOpacity(0.80);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.10)),
+      ),
+      child: Text(
+        tag.toUpperCase(),
+        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: fg),
       ),
     );
   }

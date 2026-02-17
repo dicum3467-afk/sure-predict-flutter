@@ -1,41 +1,36 @@
-// lib/models/fixture.dart
 class FixtureLite {
   final int id;
-
-  final DateTime dateUtc; // API-Football returns ISO date (UTC)
-  final int timestamp;
-
-  final String statusShort; // NS, FT, 1H, HT etc.
+  final DateTime date; // UTC
+  final String statusShort;
 
   final int leagueId;
   final String leagueName;
   final String leagueCountry;
 
   final int homeId;
-  final String home;
+  final String homeName;
+
   final int awayId;
-  final String away;
+  final String awayName;
 
   final int? goalsHome;
   final int? goalsAway;
 
   FixtureLite({
     required this.id,
-    required this.dateUtc,
-    required this.timestamp,
+    required this.date,
     required this.statusShort,
     required this.leagueId,
     required this.leagueName,
     required this.leagueCountry,
     required this.homeId,
-    required this.home,
+    required this.homeName,
     required this.awayId,
-    required this.away,
+    required this.awayName,
     required this.goalsHome,
     required this.goalsAway,
   });
 
-  // -------- Derived UI helpers --------
   bool get isFinished => statusShort == 'FT' || statusShort == 'AET' || statusShort == 'PEN';
   bool get isNotStarted => statusShort == 'NS';
 
@@ -49,32 +44,30 @@ class FixtureLite {
     return '$leagueName • $leagueCountry';
   }
 
-  static FixtureLite fromApiFootball(Map<String, dynamic> j) {
-    final fixture = (j['fixture'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
-    final league = (j['league'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
-    final teams = (j['teams'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
-    final homeTeam = (teams['home'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
-    final awayTeam = (teams['away'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
-    final goals = (j['goals'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
+  factory FixtureLite.fromApiFootball(Map<String, dynamic> item) {
+    final fixture = (item['fixture'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
+    final league = (item['league'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
+    final teams = (item['teams'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
+    final home = (teams['home'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
+    final away = (teams['away'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
+    final goals = (item['goals'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
     final status = (fixture['status'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
 
     final id = (fixture['id'] as num?)?.toInt() ?? 0;
-    final ts = (fixture['timestamp'] as num?)?.toInt() ?? 0;
-    final dateStr = (fixture['date'] as String?) ?? '';
-    final date = DateTime.tryParse(dateStr)?.toUtc() ?? DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: true);
+    final dateStr = fixture['date'] as String?;
+    final parsed = dateStr != null ? DateTime.tryParse(dateStr) : null;
 
     return FixtureLite(
       id: id,
-      dateUtc: date,
-      timestamp: ts,
+      date: (parsed?.toUtc()) ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       statusShort: (status['short'] as String?) ?? '',
       leagueId: (league['id'] as num?)?.toInt() ?? 0,
       leagueName: (league['name'] as String?) ?? '',
       leagueCountry: (league['country'] as String?) ?? '',
-      homeId: (homeTeam['id'] as num?)?.toInt() ?? 0,
-      home: (homeTeam['name'] as String?) ?? '',
-      awayId: (awayTeam['id'] as num?)?.toInt() ?? 0,
-      away: (awayTeam['name'] as String?) ?? '',
+      homeId: (home['id'] as num?)?.toInt() ?? 0,
+      homeName: (home['name'] as String?) ?? '',
+      awayId: (away['id'] as num?)?.toInt() ?? 0,
+      awayName: (away['name'] as String?) ?? '',
       goalsHome: (goals['home'] as num?)?.toInt(),
       goalsAway: (goals['away'] as num?)?.toInt(),
     );

@@ -15,7 +15,9 @@ dependencies:
   http: ^1.2.2
 
 flutter:
+  generate: true   # 👈 OBLIGATORIU
   uses-material-design: true
+
   assets:
     - lib/l10n/app_ro.arb
     - lib/l10n/app_en.arb

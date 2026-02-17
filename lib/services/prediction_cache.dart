@@ -1,489 +1,437 @@
-import 'dart:async';
 import 'dart:math';
 
 import '../api/api_football.dart';
 import '../models/fixture.dart';
 
 class PredictionLite {
+  final String topPick; // "1" / "X" / "2"
+  final int confidence; // 0..100
   final double pHome; // 0..1
   final double pDraw; // 0..1
   final double pAway; // 0..1
-
-  final double pBttsYes; // 0..1
-  final double pOver25; // 0..1
-
-  final int confidence; // 0..100
-  final String topPick; // "1", "X", "2"
-  final String label; // ex: "1 • 67%"
-  final String extras; // ex: "BTTS 54% • O2.5 48%"
-
-  /// "DATA" = are suficientă formă/H2H
-  /// "BASE" = fallback (date puține / lipsă)
-  final String sourceTag;
+  final String sourceTag; // "DATA" (din API predictions) / "BASE" (fallback)
+  final String extras; // text scurt
 
   const PredictionLite({
+    required this.topPick,
+    required this.confidence,
     required this.pHome,
     required this.pDraw,
     required this.pAway,
-    required this.pBttsYes,
-    required this.pOver25,
-    required this.confidence,
-    required this.topPick,
-    required this.label,
-    required this.extras,
     required this.sourceTag,
+    required this.extras,
   });
 }
 
-/// Cache + throttle pentru predicții pe listă (AI 2.0 + Smart Confidence).
 class PredictionCache {
   final ApiFootball api;
-  final int maxConcurrent;
-  final Duration ttl;
+  final Map<int, PredictionLite?> _cache = {};
+  final Map<int, Future<PredictionLite?>> _inflight = {};
 
-  final _cache = <int, _CacheEntry>{};
-  final _inFlight = <int, Future<PredictionLite?>>{};
-  int _active = 0;
-  final _queue = <int>[];
+  PredictionCache({required this.api});
 
-  PredictionCache({
-    required this.api,
-    this.maxConcurrent = 2,
-    this.ttl = const Duration(minutes: 30),
-  });
-
-  void clear() => _cache.clear();
-
-  PredictionLite? peek(int fixtureId) {
-    final e = _cache[fixtureId];
-    if (e == null) return null;
-    if (DateTime.now().isAfter(e.expiresAt)) {
-      _cache.remove(fixtureId);
-      return null;
-    }
-    return e.value;
+  void clear() {
+    _cache.clear();
+    _inflight.clear();
   }
 
   Future<PredictionLite?> getForFixture(FixtureLite f) async {
-    final cached = peek(f.id);
-    if (cached != null) return cached;
+    final id = f.id;
+    if (_cache.containsKey(id)) return _cache[id];
+    if (_inflight.containsKey(id)) return _inflight[id]!;
 
-    final inflight = _inFlight[f.id];
-    if (inflight != null) return inflight;
-
-    final completer = Completer<PredictionLite?>();
-    _inFlight[f.id] = completer.future;
-
-    _queue.add(f.id);
-    _pump(f, completer);
-
-    return completer.future;
-  }
-
-  void _pump(FixtureLite f, Completer<PredictionLite?> completer) {
-    if (_queue.isEmpty || _queue.first != f.id) {
-      Timer(const Duration(milliseconds: 120), () => _pump(f, completer));
-      return;
-    }
-    if (_active >= maxConcurrent) {
-      Timer(const Duration(milliseconds: 120), () => _pump(f, completer));
-      return;
-    }
-
-    _queue.removeAt(0);
-    _active++;
-
-    _runAi(f).then((value) {
-      if (value != null) {
-        _cache[f.id] = _CacheEntry(value, DateTime.now().add(ttl));
-      }
-      completer.complete(value);
-    }).catchError((_) {
-      completer.complete(null);
-    }).whenComplete(() {
-      _active--;
-      _inFlight.remove(f.id);
+    final future = _compute(f).then((value) {
+      _cache[id] = value;
+      _inflight.remove(id);
+      return value;
     });
+
+    _inflight[id] = future;
+    return future;
   }
 
-  Future<PredictionLite?> _runAi(FixtureLite f) async {
-    if (!api.hasKey) return null;
+  // ----------------- Core -----------------
 
+  Future<PredictionLite?> _compute(FixtureLite f) async {
+    // dacă lipsesc IDs pentru teams, putem rula doar DATA (predictions) sau fallback simplu.
+    final hasTeams = f.homeId > 0 && f.awayId > 0;
     const tz = 'Europe/Bucharest';
 
-    List<Map<String, dynamic>> homeData = const [];
-    List<Map<String, dynamic>> awayData = const [];
-    List<Map<String, dynamic>> h2hData = const [];
+    // 1) try DATA predictions first (cel mai bun)
+    final predRes = await api.getPredictions(f.id);
+    if (predRes.isOk && predRes.data != null) {
+      final parsed = _parsePredictionsResponse(predRes.data!);
+      if (parsed != null) return parsed;
+    }
 
-    try {
-      final homeLast = await api.lastFixturesForTeam(teamId: f.homeId, last: 8, timezone: tz);
-      if (homeLast.isOk && homeLast.data != null) homeData = homeLast.data!;
-    } catch (_) {}
+    // 2) fallback BASE smart confidence (form + h2h + context)
+    if (!hasTeams) {
+      return _baseFallbackNoTeams(f);
+    }
 
-    try {
-      final awayLast = await api.lastFixturesForTeam(teamId: f.awayId, last: 8, timezone: tz);
-      if (awayLast.isOk && awayLast.data != null) awayData = awayLast.data!;
-    } catch (_) {}
+    // Run in parallel: last fixtures for each team + h2h
+    final futures = await Future.wait([
+      api.lastFixturesForTeam(teamId: f.homeId, last: 8, timezone: tz),
+      api.lastFixturesForTeam(teamId: f.awayId, last: 8, timezone: tz),
+      api.headToHead(homeTeamId: f.homeId, awayTeamId: f.awayId, last: 5, timezone: tz),
+    ]);
 
-    try {
-      final h2h = await api.headToHead(homeTeamId: f.homeId, awayTeamId: f.awayId, last: 5);
-      if (h2h.isOk && h2h.data != null) h2hData = h2h.data!;
-    } catch (_) {}
+    final homeLastRes = futures[0] as ApiResult<List<Map<String, dynamic>>>;
+    final awayLastRes = futures[1] as ApiResult<List<Map<String, dynamic>>>;
+    final h2hRes = futures[2] as ApiResult<List<Map<String, dynamic>>>;
 
-    // Baseline neutru dacă nu avem date
-    final hStats = homeData.isNotEmpty
-        ? _teamStats(homeData, f.homeId)
-        : _TeamStats(counted: 0, ppg: 1.35, gfPerGame: 1.25, gaPerGame: 1.25, trend: 0.0);
+    final homeLast = (homeLastRes.isOk ? (homeLastRes.data ?? const []) : const <Map<String, dynamic>>[]);
+    final awayLast = (awayLastRes.isOk ? (awayLastRes.data ?? const []) : const <Map<String, dynamic>>[]);
+    final h2h = (h2hRes.isOk ? (h2hRes.data ?? const []) : const <Map<String, dynamic>>[]);
 
-    final aStats = awayData.isNotEmpty
-        ? _teamStats(awayData, f.awayId)
-        : _TeamStats(counted: 0, ppg: 1.35, gfPerGame: 1.25, gaPerGame: 1.25, trend: 0.0);
-
-    final h2hDelta = h2hData.isNotEmpty ? _h2hDelta(h2hData, f.homeId, f.awayId) : 0;
-
-    // TAG sursă: DATA dacă avem suficientă formă / BASE dacă e fallback
-    final totalGames = hStats.counted + aStats.counted;
-    final bool strongData = totalGames >= 10; // ~5+5 meciuri reale
-    final String sourceTag = strongData ? 'DATA' : 'BASE';
-
-    // --- MODEL: lambda Poisson
-    const homeAdv = 0.12;
-
-    final formBoost = (hStats.ppg - aStats.ppg).clamp(-3.0, 3.0) * 0.04;
-    final trendBoost = (hStats.trend - aStats.trend).clamp(-1.0, 1.0) * 0.06;
-    final h2hBoost = (h2hDelta.clamp(-3, 3)) * 0.02;
-
-    double lambdaHome =
-        (0.55 * hStats.gfPerGame + 0.45 * aStats.gaPerGame) + homeAdv + formBoost + trendBoost + h2hBoost;
-    double lambdaAway =
-        (0.55 * aStats.gfPerGame + 0.45 * hStats.gaPerGame) - homeAdv - formBoost - trendBoost - h2hBoost;
-
-    lambdaHome = lambdaHome.clamp(0.2, 3.2);
-    lambdaAway = lambdaAway.clamp(0.2, 3.2);
-
-    // --- 1X2
-    final probs = _matchProbsFromPoisson(lambdaHome, lambdaAway, maxGoals: 6);
-    final pHome = probs.$1;
-    final pDraw = probs.$2;
-    final pAway = probs.$3;
-
-    final topPick = _topPick(pHome, pDraw, pAway);
-    final topVal = max(pHome, max(pDraw, pAway));
-    final second = _secondBest(pHome, pDraw, pAway);
-    final margin = (topVal - second).clamp(0.0, 1.0);
-
-    // --- BTTS & O2.5
-    final pBttsYes = _pBttsYes(lambdaHome, lambdaAway);
-    final pOver25 = _pOver25(lambdaHome, lambdaAway);
-
-    // --- SMART CONFIDENCE (real)
-    final conf = _smartConfidence(
-      pHome: pHome,
-      pDraw: pDraw,
-      pAway: pAway,
-      lambdaHome: lambdaHome,
-      lambdaAway: lambdaAway,
-      hStats: hStats,
-      aStats: aStats,
-      h2hDelta: h2hDelta,
-      homeAdv: homeAdv,
-      margin: margin,
-      topVal: topVal,
-      hasH2h: h2hData.isNotEmpty,
+    return _buildSmartConfidence(
+      f: f,
+      homeLast: homeLast,
+      awayLast: awayLast,
+      h2h: h2h,
     );
+  }
 
-    final extras =
-        'BTTS ${(pBttsYes * 100).toStringAsFixed(0)}% • O2.5 ${(pOver25 * 100).toStringAsFixed(0)}%';
+  // ----------------- DATA parser -----------------
+
+  PredictionLite? _parsePredictionsResponse(Map<String, dynamic> item) {
+    // API-Football /predictions: item are keys: "predictions", "teams", "comparison", etc.
+    final predictions = item['predictions'];
+    if (predictions is! Map) return null;
+
+    // winner can be {"id":..,"name":..,"comment":"Win or draw"} or null
+    final winner = predictions['winner'];
+
+    // percent: {"home":"45%","draw":"26%","away":"29%"} (uneori)
+    final percent = predictions['percent'];
+
+    double ph = 0.0, pd = 0.0, pa = 0.0;
+    if (percent is Map) {
+      ph = _pctTo01(percent['home']);
+      pd = _pctTo01(percent['draw']);
+      pa = _pctTo01(percent['away']);
+      final sum = ph + pd + pa;
+      if (sum > 0) {
+        ph /= sum;
+        pd /= sum;
+        pa /= sum;
+      }
+    }
+
+    // top pick
+    String top = 'X';
+    if (winner is Map && winner['id'] != null) {
+      // we don't know home/away mapping from winner id here safely without team ids;
+      // but the API often sets winner.name. We'll infer via string compare later if available.
+      // fallback: choose max probability if we have it
+      top = _pickFromProbs(ph, pd, pa);
+    } else {
+      top = _pickFromProbs(ph, pd, pa);
+    }
+
+    // confidence – use max(prob)*100 if available else a conservative 55
+    final conf = (max(ph, max(pd, pa)) * 100).round().clamp(0, 100);
+
+    // extras: advice (string) if present
+    final advice = predictions['advice'];
+    final extra = (advice is String && advice.trim().isNotEmpty) ? advice.trim() : 'Model DATA';
+
+    // if percent missing => return null (we prefer BASE)
+    if ((ph + pd + pa) == 0) return null;
 
     return PredictionLite(
-      pHome: pHome,
-      pDraw: pDraw,
-      pAway: pAway,
-      pBttsYes: pBttsYes,
-      pOver25: pOver25,
-      confidence: conf,
-      topPick: topPick,
-      label: '$topPick • $conf%',
-      extras: extras,
-      sourceTag: sourceTag,
+      topPick: top,
+      confidence: max(55, conf),
+      pHome: ph,
+      pDraw: pd,
+      pAway: pa,
+      sourceTag: 'DATA',
+      extras: extra,
     );
   }
 
-  // ---------------- SMART CONFIDENCE ----------------
+  double _pctTo01(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return (v / 100.0).clamp(0.0, 1.0);
+    if (v is String) {
+      final s = v.replaceAll('%', '').trim();
+      final n = double.tryParse(s);
+      if (n == null) return 0.0;
+      return (n / 100.0).clamp(0.0, 1.0);
+    }
+    return 0.0;
+  }
 
-  int _smartConfidence({
-    required double pHome,
-    required double pDraw,
-    required double pAway,
-    required double lambdaHome,
-    required double lambdaAway,
-    required _TeamStats hStats,
-    required _TeamStats aStats,
-    required int h2hDelta,
-    required double homeAdv,
-    required double margin,
-    required double topVal,
-    required bool hasH2h,
+  // ----------------- BASE fallback -----------------
+
+  PredictionLite _baseFallbackNoTeams(FixtureLite f) {
+    // simplu: ușor avantaj home
+    final ph = 0.40;
+    final pd = 0.30;
+    final pa = 0.30;
+    final top = _pickFromProbs(ph, pd, pa);
+    return PredictionLite(
+      topPick: top,
+      confidence: 52,
+      pHome: ph,
+      pDraw: pd,
+      pAway: pa,
+      sourceTag: 'BASE',
+      extras: 'Fallback (IDs echipe lipsă)',
+    );
+  }
+
+  PredictionLite _buildSmartConfidence({
+    required FixtureLite f,
+    required List<Map<String, dynamic>> homeLast,
+    required List<Map<String, dynamic>> awayLast,
+    required List<Map<String, dynamic>> h2h,
   }) {
-    final clarity = (topVal * 55) + (margin * 45);
+    // Compute form score: points per match + goal diff
+    final homeForm = _formScore(teamId: f.homeId, fixtures: homeLast);
+    final awayForm = _formScore(teamId: f.awayId, fixtures: awayLast);
 
-    final ppgDiff = (hStats.ppg - aStats.ppg).clamp(-3.0, 3.0);
-    final formScore = (ppgDiff.abs() / 3.0) * 16;
+    // h2h tilt
+    final h2hTilt = _h2hTilt(homeId: f.homeId, awayId: f.awayId, fixtures: h2h);
 
-    final trendDiff = (hStats.trend - aStats.trend).clamp(-1.0, 1.0);
-    final trendScore = (trendDiff.abs()) * 10;
+    // baseline probabilities
+    double ph = 0.38;
+    double pd = 0.30;
+    double pa = 0.32;
 
-    final hNet = (hStats.gfPerGame - hStats.gaPerGame).clamp(-3.0, 3.0);
-    final aNet = (aStats.gfPerGame - aStats.gaPerGame).clamp(-3.0, 3.0);
-    final netDiff = (hNet - aNet).clamp(-3.0, 3.0);
-    final netScore = (netDiff.abs() / 3.0) * 12;
+    // apply form boost
+    final diff = (homeForm - awayForm).clamp(-1.0, 1.0);
+    ph += 0.12 * diff;
+    pa -= 0.12 * diff;
 
-    final goalEdge = (lambdaHome - lambdaAway).abs().clamp(0.0, 2.0);
-    final goalEdgeScore = (goalEdge / 2.0) * 10;
+    // apply h2h tilt (small)
+    ph += 0.06 * h2hTilt;
+    pa -= 0.06 * h2hTilt;
 
-    final h2hScore = hasH2h ? (h2hDelta.abs().clamp(0, 3) / 3.0) * 6 : 0.0;
+    // normalize + clamp
+    ph = ph.clamp(0.10, 0.78);
+    pa = pa.clamp(0.10, 0.78);
+    pd = (1.0 - (ph + pa)).clamp(0.10, 0.45);
 
-    final dataCount = hStats.counted + aStats.counted;
-    final dataQuality = (dataCount / 16.0).clamp(0.25, 1.0);
-    final dataScore = dataQuality * 12;
+    final sum = ph + pd + pa;
+    ph /= sum;
+    pd /= sum;
+    pa /= sum;
 
-    final entropyPenalty = _entropyPenalty(pHome, pDraw, pAway);
+    final top = _pickFromProbs(ph, pd, pa);
 
-    final homeAdvScore = homeAdv * 10;
+    final conf = _smartConfidencePercent(
+      ph: ph,
+      pd: pd,
+      pa: pa,
+      formDiff: diff,
+      h2hTilt: h2hTilt,
+      sampleHome: homeLast.length,
+      sampleAway: awayLast.length,
+      sampleH2h: h2h.length,
+    );
 
-    double raw =
-        18 +
-        clarity +
-        formScore +
-        trendScore +
-        netScore +
-        goalEdgeScore +
-        h2hScore +
-        dataScore +
-        homeAdvScore -
-        entropyPenalty;
+    final extras = _extrasText(
+      homeForm: homeForm,
+      awayForm: awayForm,
+      h2hTilt: h2hTilt,
+      sampleHome: homeLast.length,
+      sampleAway: awayLast.length,
+      sampleH2h: h2h.length,
+    );
 
-    int conf = raw.round().clamp(35, 94);
-
-    if (dataCount <= 4) conf = min(conf, 72);
-    if (dataCount == 0) conf = min(conf, 66);
-
-    return conf;
-  }
-
-  double _entropyPenalty(double a, double b, double c) {
-    double h(double p) => p <= 0 ? 0 : -p * log(p);
-    final H = h(a) + h(b) + h(c);
-    final norm = ((H - 0.7) / (1.0986 - 0.7)).clamp(0.0, 1.0);
-    return norm * 12;
-  }
-
-  // -------------------- helpers --------------------
-
-  String _topPick(double pHome, double pDraw, double pAway) {
-    if (pHome >= pDraw && pHome >= pAway) return '1';
-    if (pAway >= pHome && pAway >= pDraw) return '2';
-    return 'X';
-  }
-
-  double _secondBest(double a, double b, double c) {
-    final list = [a, b, c]..sort();
-    return list[1];
-  }
-
-  (double, double, double) _matchProbsFromPoisson(double lH, double lA, {int maxGoals = 6}) {
-    double pH = 0, pD = 0, pA = 0;
-    for (int gh = 0; gh <= maxGoals; gh++) {
-      final ph = _pois(gh, lH);
-      for (int ga = 0; ga <= maxGoals; ga++) {
-        final pa = _pois(ga, lA);
-        final p = ph * pa;
-        if (gh > ga) pH += p;
-        else if (gh == ga) pD += p;
-        else pA += p;
-      }
-    }
-    final s = pH + pD + pA;
-    if (s <= 0) return (0.33, 0.34, 0.33);
-    return (pH / s, pD / s, pA / s);
-  }
-
-  double _pBttsYes(double lH, double lA) {
-    final pH0 = _pois(0, lH);
-    final pA0 = _pois(0, lA);
-    final pBoth0 = pH0 * pA0;
-    return (1 - pH0 - pA0 + pBoth0).clamp(0.0, 1.0);
-  }
-
-  double _pOver25(double lH, double lA) {
-    final lt = (lH + lA).clamp(0.1, 8.0);
-    final p0 = _pois(0, lt);
-    final p1 = _pois(1, lt);
-    final p2 = _pois(2, lt);
-    final under = (p0 + p1 + p2).clamp(0.0, 1.0);
-    return (1 - under).clamp(0.0, 1.0);
-  }
-
-  double _pois(int k, double lambda) {
-    final e = exp(-lambda);
-    double num = 1.0;
-    for (int i = 0; i < k; i++) {
-      num *= lambda;
-    }
-    return e * num / _fact(k);
-  }
-
-  double _fact(int n) {
-    if (n <= 1) return 1.0;
-    double r = 1.0;
-    for (int i = 2; i <= n; i++) r *= i;
-    return r;
-  }
-
-  _TeamStats _teamStats(List<Map<String, dynamic>> fixtures, int teamId) {
-    int points = 0;
-    int counted = 0;
-    int gf = 0;
-    int ga = 0;
-
-    int pointsFirst = 0, gamesFirst = 0;
-    int pointsLast = 0, gamesLast = 0;
-
-    final valid = <_MiniResult>[];
-
-    for (final item in fixtures) {
-      if (valid.length >= 8) break;
-
-      final fixture = (item['fixture'] ?? {}) as Map<String, dynamic>;
-      final status = (fixture['status'] ?? {}) as Map<String, dynamic>;
-      final short = (status['short'] ?? '').toString();
-      if (!(short == 'FT' || short == 'AET' || short == 'PEN')) continue;
-
-      final teams = (item['teams'] ?? {}) as Map<String, dynamic>;
-      final goals = (item['goals'] ?? {}) as Map<String, dynamic>;
-      final home = (teams['home'] ?? {}) as Map<String, dynamic>;
-
-      final hid = home['id'];
-      final gh = goals['home'] is int ? goals['home'] as int : int.tryParse('${goals['home']}') ?? 0;
-      final gA = goals['away'] is int ? goals['away'] as int : int.tryParse('${goals['away']}') ?? 0;
-
-      final isHome = hid == teamId;
-      final my = isHome ? gh : gA;
-      final op = isHome ? gA : gh;
-
-      int pts = 0;
-      if (my > op) pts = 3;
-      else if (my == op) pts = 1;
-
-      valid.add(_MiniResult(gf: my, ga: op, pts: pts));
-    }
-
-    for (final r in valid) {
-      gf += r.gf;
-      ga += r.ga;
-      points += r.pts;
-      counted++;
-    }
-
-    final chrono = valid.reversed.toList();
-    for (int i = 0; i < chrono.length; i++) {
-      final r = chrono[i];
-      if (i < 4) {
-        pointsFirst += r.pts;
-        gamesFirst++;
-      } else {
-        pointsLast += r.pts;
-        gamesLast++;
-      }
-    }
-
-    final games = max(counted, 1);
-    final ppg = points / games;
-    final gfpg = gf / games;
-    final gapg = ga / games;
-
-    final ppgFirst = gamesFirst == 0 ? ppg : pointsFirst / gamesFirst;
-    final ppgLast = gamesLast == 0 ? ppg : pointsLast / gamesLast;
-
-    final trend = ((ppgLast - ppgFirst) / 3.0).clamp(-1.0, 1.0);
-
-    return _TeamStats(
-      counted: counted,
-      ppg: ppg,
-      gfPerGame: gfpg,
-      gaPerGame: gapg,
-      trend: trend,
+    return PredictionLite(
+      topPick: top,
+      confidence: conf,
+      pHome: ph,
+      pDraw: pd,
+      pAway: pa,
+      sourceTag: 'BASE',
+      extras: extras,
     );
   }
 
-  int _h2hDelta(List<Map<String, dynamic>> fixtures, int homeId, int awayId) {
-    int homeWins = 0, awayWins = 0;
-    int counted = 0;
+  double _formScore({
+    required int teamId,
+    required List<Map<String, dynamic>> fixtures,
+  }) {
+    // return ~0..1
+    if (fixtures.isEmpty) return 0.50;
 
-    for (final item in fixtures) {
-      if (counted >= 5) break;
+    double points = 0;
+    double gdSum = 0;
+    int n = 0;
 
-      final fixture = (item['fixture'] ?? {}) as Map<String, dynamic>;
-      final status = (fixture['status'] ?? {}) as Map<String, dynamic>;
-      final short = (status['short'] ?? '').toString();
-      if (!(short == 'FT' || short == 'AET' || short == 'PEN')) continue;
+    for (final fx in fixtures) {
+      final teams = fx['teams'];
+      final goals = fx['goals'];
+      if (teams is! Map || goals is! Map) continue;
 
-      final teams = (item['teams'] ?? {}) as Map<String, dynamic>;
-      final goals = (item['goals'] ?? {}) as Map<String, dynamic>;
-      final th = (teams['home'] ?? {}) as Map<String, dynamic>;
-      final ta = (teams['away'] ?? {}) as Map<String, dynamic>;
-      final hid = th['id'];
-      final aid = ta['id'];
+      final home = teams['home'];
+      final away = teams['away'];
+      if (home is! Map || away is! Map) continue;
 
-      final gh = goals['home'] is int ? goals['home'] as int : int.tryParse('${goals['home']}') ?? 0;
-      final ga = goals['away'] is int ? goals['away'] as int : int.tryParse('${goals['away']}') ?? 0;
+      final hid = _asInt(home['id']);
+      final aid = _asInt(away['id']);
 
-      int scoreHome, scoreAway;
-      if (hid == homeId && aid == awayId) {
-        scoreHome = gh;
-        scoreAway = ga;
-      } else if (hid == awayId && aid == homeId) {
-        scoreHome = ga;
-        scoreAway = gh;
-      } else {
-        continue;
-      }
+      final gh = _asInt(goals['home']);
+      final ga = _asInt(goals['away']);
+      if (gh < 0 || ga < 0) continue;
 
-      if (scoreHome > scoreAway) homeWins++;
-      else if (scoreHome < scoreAway) awayWins++;
+      bool isHome = hid == teamId;
+      bool isAway = aid == teamId;
+      if (!isHome && !isAway) continue;
 
-      counted++;
+      n += 1;
+
+      final my = isHome ? gh : ga;
+      final opp = isHome ? ga : gh;
+      gdSum += (my - opp);
+
+      if (my > opp) points += 3;
+      else if (my == opp) points += 1;
+      else points += 0;
     }
 
-    return homeWins - awayWins;
+    if (n == 0) return 0.50;
+
+    final ppm = points / (n * 3); // 0..1
+    final gdNorm = (gdSum / n); // goal diff per match
+
+    // map gd to [-1..1] approx using tanh-ish clamp
+    final gdScaled = (gdNorm / 2.5).clamp(-1.0, 1.0);
+
+    // weighted blend
+    final score = (0.72 * ppm + 0.28 * (0.5 + 0.5 * gdScaled)).clamp(0.0, 1.0);
+    return score;
   }
-}
 
-class _MiniResult {
-  final int gf;
-  final int ga;
-  final int pts;
-  _MiniResult({required this.gf, required this.ga, required this.pts});
-}
+  double _h2hTilt({
+    required int homeId,
+    required int awayId,
+    required List<Map<String, dynamic>> fixtures,
+  }) {
+    // returns -1..1; positive => favors home
+    if (fixtures.isEmpty) return 0.0;
 
-class _TeamStats {
-  final int counted;
-  final double ppg;
-  final double gfPerGame;
-  final double gaPerGame;
-  final double trend; // -1..+1
+    int homeWins = 0;
+    int awayWins = 0;
+    int draws = 0;
 
-  _TeamStats({
-    required this.counted,
-    required this.ppg,
-    required this.gfPerGame,
-    required this.gaPerGame,
-    required this.trend,
-  });
-}
+    for (final fx in fixtures) {
+      final teams = fx['teams'];
+      final goals = fx['goals'];
+      if (teams is! Map || goals is! Map) continue;
 
-class _CacheEntry {
-  final PredictionLite value;
-  final DateTime expiresAt;
-  _CacheEntry(this.value, this.expiresAt);
+      final home = teams['home'];
+      final away = teams['away'];
+      if (home is! Map || away is! Map) continue;
+
+      final hid = _asInt(home['id']);
+      final aid = _asInt(away['id']);
+      if (!((hid == homeId && aid == awayId) || (hid == awayId && aid == homeId))) continue;
+
+      final gh = _asInt(goals['home']);
+      final ga = _asInt(goals['away']);
+      if (gh < 0 || ga < 0) continue;
+
+      // Determine winner relative to homeId (our match home)
+      int matchHomeGoals;
+      int matchAwayGoals;
+      if (hid == homeId) {
+        matchHomeGoals = gh;
+        matchAwayGoals = ga;
+      } else {
+        // swapped
+        matchHomeGoals = ga;
+        matchAwayGoals = gh;
+      }
+
+      if (matchHomeGoals > matchAwayGoals) homeWins++;
+      else if (matchHomeGoals < matchAwayGoals) awayWins++;
+      else draws++;
+    }
+
+    final total = homeWins + awayWins + draws;
+    if (total == 0) return 0.0;
+
+    final tilt = ((homeWins - awayWins) / total).clamp(-1.0, 1.0);
+    return tilt;
+  }
+
+  int _smartConfidencePercent({
+    required double ph,
+    required double pd,
+    required double pa,
+    required double formDiff, // -1..1
+    required double h2hTilt, // -1..1
+    required int sampleHome,
+    required int sampleAway,
+    required int sampleH2h,
+  }) {
+    final top = max(ph, max(pd, pa)); // 0..1
+
+    // base from probability separation
+    double base = 45 + (top * 40); // 45..85
+
+    // boost if form strongly favors one side
+    base += (formDiff.abs() * 8);
+
+    // boost if h2h consistent
+    base += (h2hTilt.abs() * 5);
+
+    // penalty for low samples
+    final sample = min(sampleHome, sampleAway);
+    if (sample < 4) base -= 8;
+    else if (sample < 6) base -= 4;
+
+    if (sampleH2h == 0) base -= 3;
+
+    // draw-heavy -> reduce confidence slightly
+    if (pd > 0.34) base -= 4;
+
+    // clamp to int 0..100
+    final v = base.round().clamp(0, 100);
+    return v;
+  }
+
+  String _extrasText({
+    required double homeForm,
+    required double awayForm,
+    required double h2hTilt,
+    required int sampleHome,
+    required int sampleAway,
+    required int sampleH2h,
+  }) {
+    String formLabel(double v) {
+      if (v >= 0.72) return 'foarte bună';
+      if (v >= 0.60) return 'bună';
+      if (v >= 0.48) return 'medie';
+      return 'slabă';
+    }
+
+    final form = 'Formă: H ${formLabel(homeForm)} vs A ${formLabel(awayForm)}';
+    final h2h = sampleH2h == 0
+        ? 'H2H: N/A'
+        : (h2hTilt > 0.15
+            ? 'H2H: avantaj home'
+            : (h2hTilt < -0.15 ? 'H2H: avantaj away' : 'H2H: echilibrat'));
+
+    final samples = 'Samples: H $sampleHome / A $sampleAway / H2H $sampleH2h';
+    return '$form • $h2h • $samples';
+  }
+
+  String _pickFromProbs(double ph, double pd, double pa) {
+    if (ph >= pd && ph >= pa) return '1';
+    if (pa >= ph && pa >= pd) return '2';
+    return 'X';
+    }
+
+  int _asInt(dynamic v) {
+    if (v == null) return -1;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v) ?? -1;
+    return -1;
+  }
 }

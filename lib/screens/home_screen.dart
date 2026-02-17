@@ -1,14 +1,10 @@
-import 'dart:math';
+// lib/screens/home_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import '../api/api_football.dart';
 import '../l10n/l10n.dart';
 import '../models/fixture.dart';
-import '../services/prediction_cache.dart';
-import 'match_screen.dart';
-
-enum _ViewMode { singleDay, range }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,841 +13,724 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+enum ViewMode { day, range }
+
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   late final ApiFootball api;
-  late final PredictionCache predCache;
+  late final TabController _tabs;
 
-  bool loading = true;
-  String? errorText;
+  // ---- Settings ----
+  static const String _tz = 'Europe/Bucharest';
+  ViewMode _mode = ViewMode.day;
 
-  // Lista curentă
-  List<FixtureLite> fixtures = const [];
+  // Day mode offsets (relative to today)
+  int _dayOffset = 0; // -1 yesterday, 0 today, 1 tomorrow, ...
 
-  // Ultimul rezultat bun (stale cache)
-  List<FixtureLite> lastGoodFixtures = const [];
-  DateTime? lastGoodAt;
+  // Range mode
+  DateTimeRange? _range;
+  int _rangeDays = 3; // auto clamp 1..7
 
-  bool romaniaOnly = false;
-
-  _ViewMode viewMode = _ViewMode.singleDay;
-  int dayOffset = 0;
-
-  int rangeDays = 7;
-  bool includePast = true;
-  bool includeFuture = true;
-
-  bool topLoading = false;
-  String? topError;
-  List<_TopItem> top10 = const [];
-
-  static const int _maxRangeDays = 7;
-
-  DateTime? _lastRefreshTap; // debounce refresh taps
+  // ---- Data state ----
+  bool _loading = false;
+  String? _error;
+  String? _debug;
+  List<FixtureLite> _items = [];
+  List<FixtureLite> _lastGoodItems = [];
 
   @override
   void initState() {
     super.initState();
-    api = ApiFootball.fromDartDefine();
-    predCache = PredictionCache(api: api);
-    _load(showSpinner: true);
+    api = ApiFootball(key: const String.fromEnvironment('APIFOOTBALL_KEY'));
+    _tabs = TabController(length: 2, vsync: this);
+    _load();
   }
 
-  int _clampedRangeDays(int d) => d.clamp(1, _maxRangeDays);
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
 
-  void _setRangeDays(int d) {
-    final clamped = _clampedRangeDays(d);
-    if (clamped != d) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Limită automată: maxim 7 zile pentru interval.')),
-        );
-      });
+  // ---------- Date helpers ----------
+  DateTime _todayLocal() => DateTime.now();
+
+  String _ymd(DateTime d) {
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$m-$day';
+  }
+
+  DateTime _stripTime(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  int _clampDays(int v) => v.clamp(1, 7);
+
+  Future<void> _pickRange() async {
+    final now = _todayLocal();
+    final start = _stripTime(now.subtract(Duration(days: _rangeDays - 1)));
+    final end = _stripTime(now);
+
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: now.subtract(const Duration(days: 90)),
+      lastDate: now.add(const Duration(days: 90)),
+      initialDateRange: _range ?? DateTimeRange(start: start, end: end),
+    );
+
+    if (picked == null) return;
+
+    // clamp to max 7 days
+    final days = picked.end.difference(picked.start).inDays + 1;
+    final safeDays = _clampDays(days);
+
+    DateTimeRange safeRange = picked;
+    if (days > 7) {
+      safeRange = DateTimeRange(start: picked.end.subtract(const Duration(days: 6)), end: picked.end);
     }
-    setState(() => rangeDays = clamped);
-    _load(showSpinner: true);
-  }
 
-  // ---------- API ----------
-  Future<List<FixtureLite>> _fixturesByDate(DateTime date, String tz) async {
-    final raw = await api.fixturesByDate(date: date, timezone: tz);
-    return raw.map((m) => FixtureLite.fromApiFootball(m)).toList();
-  }
-
-  // ---------- LOAD with stale fallback ----------
-  Future<void> _load({required bool showSpinner}) async {
-    if (showSpinner) {
-      setState(() {
-        loading = true;
-        errorText = null;
-      });
-    } else {
-      setState(() => errorText = null);
-    }
-
-    // Nu ștergem predCache înainte să știm că avem succes
     setState(() {
-      top10 = const [];
-      topError = null;
-      topLoading = false;
+      _rangeDays = safeDays;
+      _range = safeRange;
+      _mode = ViewMode.range;
+    });
+
+    await _load();
+  }
+
+  // ---------- Load logic ----------
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+      _debug = null;
     });
 
     try {
-      const tz = 'Europe/Bucharest';
-      final now = DateTime.now();
+      final List<DateTime> datesToLoad = [];
 
-      List<FixtureLite> res;
-
-      if (viewMode == _ViewMode.singleDay) {
-        res = await _fixturesByDate(now.add(Duration(days: dayOffset)), tz);
+      if (_mode == ViewMode.day) {
+        final d = _stripTime(_todayLocal().add(Duration(days: _dayOffset)));
+        datesToLoad.add(d);
       } else {
-        final d = _clampedRangeDays(rangeDays);
+        final now = _stripTime(_todayLocal());
+        final range = _range ??
+            DateTimeRange(
+              start: now.subtract(Duration(days: _rangeDays - 1)),
+              end: now,
+            );
 
-        final days = <DateTime>[];
-        if (includePast) {
-          for (int i = d; i >= 1; i--) {
-            days.add(now.subtract(Duration(days: i)));
+        // clamp to 7 days
+        DateTime start = _stripTime(range.start);
+        DateTime end = _stripTime(range.end);
+        final span = end.difference(start).inDays + 1;
+        if (span > 7) start = end.subtract(const Duration(days: 6));
+
+        for (int i = 0; i <= end.difference(start).inDays; i++) {
+          datesToLoad.add(start.add(Duration(days: i)));
+        }
+      }
+
+      _debug = 'tz=$_tz dates=${datesToLoad.map(_ymd).join(", ")}';
+
+      final combined = <FixtureLite>[];
+
+      for (final d in datesToLoad) {
+        final ymd = _ymd(d);
+
+        // We accept BOTH: ApiResult<List<FixtureLite>> OR ApiResult<List<Map>>
+        final res = await api.fixturesByDate(date: ymd, timezone: _tz);
+        final ok = (res as dynamic).isOk == true;
+        final data = (res as dynamic).data;
+
+        if (!ok || data == null) {
+          final err = (res as dynamic).error?.toString() ?? 'API error';
+          throw Exception('fixturesByDate($ymd) failed: $err');
+        }
+
+        if (data is List<FixtureLite>) {
+          combined.addAll(data);
+        } else if (data is List) {
+          for (final x in data) {
+            if (x is FixtureLite) {
+              combined.add(x);
+            } else if (x is Map<String, dynamic>) {
+              combined.add(FixtureLite.fromApiFootball(x));
+            } else if (x is Map) {
+              combined.add(FixtureLite.fromApiFootball(x.cast<String, dynamic>()));
+            }
           }
         }
-        days.add(now);
-        if (includeFuture) {
-          for (int i = 1; i <= d; i++) {
-            days.add(now.add(Duration(days: i)));
-          }
-        }
-
-        final combined = <FixtureLite>[];
-        for (final day in days) {
-          combined.addAll(await _fixturesByDate(day, tz));
-        }
-
-        final seen = <int>{};
-        res = combined.where((f) => seen.add(f.id)).toList();
       }
 
-      if (romaniaOnly) {
-        res = res.where((f) {
-          final c = (f.country ?? '').toLowerCase();
-          final l = (f.league ?? '').toLowerCase();
-          return c.contains('romania') || l.contains('romania') || l.contains('liga');
-        }).toList();
-      }
+      // Sort: day -> league -> time
+      combined.sort((a, b) {
+        final da = _stripTime(a.dateUtc.toLocal());
+        final db = _stripTime(b.dateUtc.toLocal());
+        final c0 = da.compareTo(db);
+        if (c0 != 0) return c0;
 
-      // sort: zi -> ligă -> oră -> echipă
-      res.sort((a, b) => _fixtureCompare(a, b));
+        final c1 = a.leagueCountry.compareTo(b.leagueCountry);
+        if (c1 != 0) return c1;
 
-      // SUCCESS: reset pred cache
-      predCache.clear();
+        final c2 = a.leagueName.compareTo(b.leagueName);
+        if (c2 != 0) return c2;
 
-      setState(() {
-        fixtures = res;
-        lastGoodFixtures = res;
-        lastGoodAt = DateTime.now();
-        loading = false;
-        errorText = null;
+        final c3 = a.dateUtc.compareTo(b.dateUtc);
+        if (c3 != 0) return c3;
+
+        return a.home.compareTo(b.home);
       });
 
-      _buildTop10();
-    } catch (e) {
-      // refresh failed -> keep last good list
       setState(() {
-        fixtures = lastGoodFixtures;
-        loading = false;
-        errorText = e.toString();
-      });
-    }
-  }
-
-  int _fixtureCompare(FixtureLite a, FixtureLite b) {
-    final da = a.date ?? DateTime(3000);
-    final db = b.date ?? DateTime(3000);
-
-    final aDay = DateTime(da.year, da.month, da.day);
-    final bDay = DateTime(db.year, db.month, db.day);
-    final cDay = aDay.compareTo(bDay);
-    if (cDay != 0) return cDay;
-
-    final la = (a.league ?? '').toLowerCase();
-    final lb = (b.league ?? '').toLowerCase();
-    final cLeague = la.compareTo(lb);
-    if (cLeague != 0) return cLeague;
-
-    final cTime = da.compareTo(db);
-    if (cTime != 0) return cTime;
-
-    return a.home.toLowerCase().compareTo(b.home.toLowerCase());
-  }
-
-  // ---------- TOP 10 ----------
-  Future<void> _buildTop10() async {
-    if (!mounted) return;
-    if (fixtures.isEmpty) return;
-
-    setState(() {
-      topLoading = true;
-      topError = null;
-      top10 = const [];
-    });
-
-    try {
-      final items = <_TopItem>[];
-      for (final f in fixtures) {
-        final p = await predCache.getForFixture(f);
-        if (!mounted) return;
-        if (p == null) continue;
-        items.add(_TopItem(fixture: f, pred: p));
-      }
-
-      items.sort((a, b) => b.pred.confidence.compareTo(a.pred.confidence));
-
-      setState(() {
-        top10 = items.take(10).toList();
-        topLoading = false;
+        _loading = false;
+        _items = combined;
+        _lastGoodItems = combined;
+        _debug = '${_debug ?? ""} | count=${combined.length}';
       });
     } catch (e) {
+      // IMPORTANT: keep last good list, don't blank screen
       setState(() {
-        topError = e.toString();
-        topLoading = false;
+        _loading = false;
+        _error = e.toString();
+        _items = _lastGoodItems;
+        _debug = '${_debug ?? ""} | ERROR=$_error';
       });
     }
   }
 
   // ---------- UI ----------
-  void _refreshTapped() {
-    final now = DateTime.now();
-    if (_lastRefreshTap != null && now.difference(_lastRefreshTap!).inSeconds < 2) return;
-    _lastRefreshTap = now;
-    _load(showSpinner: false);
+  @override
+  Widget build(BuildContext context) {
+    final t = AppL10n.of(context);
+
+    final title = _mode == ViewMode.day
+        ? _titleForDay(t)
+        : _titleForRange(t);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title),
+        actions: [
+          IconButton(
+            tooltip: t.t('refresh'),
+            onPressed: _load,
+            icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            tooltip: t.t('filters'),
+            onPressed: _showQuickSettings,
+            icon: const Icon(Icons.tune),
+          ),
+        ],
+        bottom: TabBar(
+          controller: _tabs,
+          tabs: [
+            Tab(icon: const Icon(Icons.sports_soccer), text: t.t('matches')),
+            Tab(icon: const Icon(Icons.emoji_events), text: t.t('top10')),
+          ],
+        ),
+      ),
+      body: Column(
+        children: [
+          _topControls(t),
+          Expanded(
+            child: TabBarView(
+              controller: _tabs,
+              children: [
+                _buildMatchesTab(t),
+                _buildTop10Tab(t),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
-  void _openFilters() {
+  String _titleForDay(AppL10n t) {
+    if (_dayOffset == -1) return t.t('matches_yesterday');
+    if (_dayOffset == 0) return t.t('matches_today');
+    if (_dayOffset == 1) return t.t('matches_tomorrow');
+    return '${t.t('matches_in')} ${_dayOffset}';
+  }
+
+  String _titleForRange(AppL10n t) {
+    final r = _range;
+    if (r == null) return '${t.t('matches_range')} (${_rangeDays} ${t.t('days')})';
+    return '${t.t('matches_range')} ${_ymd(r.start)} → ${_ymd(r.end)}';
+  }
+
+  Widget _topControls(AppL10n t) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Mode chips: Zi / Interval
+          Row(
+            children: [
+              ChoiceChip(
+                selected: _mode == ViewMode.day,
+                label: Text(t.t('day')),
+                onSelected: (_) async {
+                  setState(() => _mode = ViewMode.day);
+                  await _load();
+                },
+              ),
+              const SizedBox(width: 10),
+              ChoiceChip(
+                selected: _mode == ViewMode.range,
+                label: Text(t.t('range')),
+                onSelected: (_) async {
+                  setState(() => _mode = ViewMode.range);
+                  await _load();
+                },
+              ),
+              const Spacer(),
+              if (_loading) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          if (_mode == ViewMode.day)
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _dayChip(t, label: t.t('yesterday'), offset: -1),
+                _dayChip(t, label: t.t('today'), offset: 0),
+                _dayChip(t, label: t.t('tomorrow'), offset: 1),
+                _dayChip(t, label: '${t.t('in')} 2', offset: 2),
+                _dayChip(t, label: '${t.t('in')} 3', offset: 3),
+              ],
+            )
+          else
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                ActionChip(
+                  label: Text('${t.t('pick_range')} (≤ 7)'),
+                  onPressed: _pickRange,
+                ),
+                ChoiceChip(
+                  selected: _rangeDays == 3,
+                  label: Text('${t.t('last')} 3 ${t.t('days')}'),
+                  onSelected: (_) async {
+                    setState(() {
+                      _rangeDays = 3;
+                      _range = null;
+                    });
+                    await _load();
+                  },
+                ),
+                ChoiceChip(
+                  selected: _rangeDays == 5,
+                  label: Text('${t.t('last')} 5 ${t.t('days')}'),
+                  onSelected: (_) async {
+                    setState(() {
+                      _rangeDays = 5;
+                      _range = null;
+                    });
+                    await _load();
+                  },
+                ),
+                ChoiceChip(
+                  selected: _rangeDays == 7,
+                  label: Text('${t.t('last')} 7 ${t.t('days')}'),
+                  onSelected: (_) async {
+                    setState(() {
+                      _rangeDays = 7;
+                      _range = null;
+                    });
+                    await _load();
+                  },
+                ),
+              ],
+            ),
+
+          // Debug/Error row (safe)
+          if (_error != null || _debug != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              _error != null ? 'Info: $_error' : 'Info: $_debug',
+              style: TextStyle(
+                color: _error != null ? Colors.redAccent : Colors.white70,
+                fontSize: 12,
+              ),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _dayChip(AppL10n t, {required String label, required int offset}) {
+    return ChoiceChip(
+      selected: _dayOffset == offset && _mode == ViewMode.day,
+      label: Text(label),
+      onSelected: (_) async {
+        setState(() {
+          _mode = ViewMode.day;
+          _dayOffset = offset;
+        });
+        await _load();
+      },
+    );
+  }
+
+  Widget _buildMatchesTab(AppL10n t) {
+    if (_loading && _items.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_items.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(t.t('no_matches')),
+        ),
+      );
+    }
+
+    final groups = _groupForUI(_items);
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+      itemCount: groups.length,
+      itemBuilder: (context, index) {
+        final g = groups[index];
+        return _GroupSection(group: g);
+      },
+    );
+  }
+
+  Widget _buildTop10Tab(AppL10n t) {
+    final top = _computeTop10(_items);
+
+    if (_loading && top.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (top.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(t.t('top10_empty')),
+        ),
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+      itemCount: top.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (context, i) {
+        final item = top[i];
+        return _TopCard(rank: i + 1, f: item);
+      },
+    );
+  }
+
+  void _showQuickSettings() {
     final t = AppL10n.of(context);
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
       builder: (_) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Text(t.t('filters'), style: Theme.of(context).textTheme.titleLarge),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () {
-                      setState(() => romaniaOnly = false);
-                      Navigator.pop(context);
-                      _load(showSpinner: true);
-                    },
-                    child: Text(t.t('reset')),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: romaniaOnly,
-                onChanged: (v) {
-                  setState(() => romaniaOnly = v);
-                  Navigator.pop(context);
-                  _load(showSpinner: true);
-                },
-                title: Text(t.t('romania_only')),
-                subtitle: Text(t.t('romania_only_hint')),
-              ),
-            ],
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Text(t.t('settings'), style: Theme.of(context).textTheme.titleLarge),
+                    const Spacer(),
+                    Text('TZ: $_tz', style: const TextStyle(color: Colors.white70)),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  leading: const Icon(Icons.date_range),
+                  title: Text(t.t('pick_range')),
+                  subtitle: Text(t.t('max_7_days')),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await _pickRange();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.refresh),
+                  title: Text(t.t('refresh')),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await _load();
+                  },
+                ),
+              ],
+            ),
           ),
         );
       },
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final t = AppL10n.of(context);
-    final title = viewMode == _ViewMode.singleDay ? _singleTitle(t) : 'Interval ${_rangeLabel()}';
-
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(title),
-          bottom: const TabBar(
-            tabs: [
-              Tab(icon: Icon(Icons.sports_soccer), text: 'Meciuri'),
-              Tab(icon: Icon(Icons.emoji_events), text: 'Top 10'),
-            ],
-          ),
-          actions: [
-            IconButton(onPressed: _openFilters, icon: const Icon(Icons.tune)),
-            IconButton(onPressed: _refreshTapped, icon: const Icon(Icons.refresh)),
-          ],
-        ),
-        body: TabBarView(
-          children: [
-            _tabMatches(t),
-            _tabTop10(t),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _singleTitle(AppL10n t) {
-    if (dayOffset == 0) return t.t('matches_today');
-    if (dayOffset == 1) return t.t('matches_tomorrow');
-    if (dayOffset == -1) return 'Meciuri ieri';
-    if (dayOffset > 1) return 'Ziua +$dayOffset';
-    return 'Ziua $dayOffset';
-  }
-
-  String _rangeLabel() {
-    final d = _clampedRangeDays(rangeDays);
-    final parts = <String>[];
-    if (includePast) parts.add('-$d');
-    parts.add('0');
-    if (includeFuture) parts.add('+$d');
-    return parts.join(' .. ');
-  }
-
-  Widget _tabMatches(AppL10n t) {
-    if (loading) return Center(child: Text(t.t('loading')));
-
-    final rows = _buildRowsDayLeague(fixtures);
-
-    return RefreshIndicator(
-      onRefresh: () => _load(showSpinner: false),
-      child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-        itemCount: rows.length + 2,
-        itemBuilder: (context, i) {
-          if (i == 0) return _errorBannerIfNeeded();
-          if (i == 1) return _modeControls(t);
-          final r = rows[i - 2];
-
-          if (r.kind == _RowKind.dayHeader) return _dayHeader(context, r.day!);
-          if (r.kind == _RowKind.leagueHeader) return _leagueHeader(r.leagueName!, r.country);
-          return _fixtureCard(context, t, r.fixture!);
-        },
-      ),
-    );
-  }
-
-  Widget _errorBannerIfNeeded() {
-    if (errorText == null) return const SizedBox.shrink();
-
-    final ts = lastGoodAt == null ? '' : ' (ultimul rezultat: ${DateFormat('HH:mm').format(lastGoodAt!)})';
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          color: Colors.red.withOpacity(0.12),
-          border: Border.all(color: Colors.red.withOpacity(0.25)),
-        ),
-        padding: const EdgeInsets.all(12),
-        child: Text(
-          'Refresh a eșuat$ts.\n$errorText',
-          style: TextStyle(color: Colors.white.withOpacity(0.90)),
-        ),
-      ),
-    );
-  }
-
-  List<_RowItem> _buildRowsDayLeague(List<FixtureLite> list) {
-    final rows = <_RowItem>[];
+  // ---------- Grouping ----------
+  List<_UiGroup> _groupForUI(List<FixtureLite> items) {
+    final out = <_UiGroup>[];
 
     DateTime? currentDay;
-    String? currentLeague;
+    String? currentLeagueKey;
 
-    for (final f in list) {
-      final dt = f.date ?? DateTime(3000, 1, 1);
-      final day = DateTime(dt.year, dt.month, dt.day);
-      final league = (f.league ?? '').trim();
-      final leagueKey = league.isEmpty ? '—' : league;
+    for (final f in items) {
+      final day = _stripTime(f.dateUtc.toLocal());
+      final leagueKey = '${f.leagueId}:${f.leagueName}:${f.leagueCountry}';
 
       if (currentDay == null || day != currentDay) {
         currentDay = day;
-        currentLeague = null;
-        rows.add(_RowItem.day(day));
+        currentLeagueKey = null;
+        out.add(_UiGroup.dayHeader(day));
       }
 
-      if (currentLeague == null || leagueKey != currentLeague) {
-        currentLeague = leagueKey;
-        rows.add(_RowItem.league(leagueKey, country: f.country));
+      if (currentLeagueKey == null || leagueKey != currentLeagueKey) {
+        currentLeagueKey = leagueKey;
+        out.add(_UiGroup.leagueHeader(f.leagueName, f.leagueCountry));
       }
 
-      rows.add(_RowItem.fixture(f));
+      out.add(_UiGroup.fixture(f));
     }
 
-    return rows;
+    return out;
   }
 
-  Widget _dayHeader(BuildContext context, DateTime day) {
-    final loc = Localizations.localeOf(context).toLanguageTag();
-    final text = DateFormat('EEEE, d MMM', loc).format(day);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(2, 10, 2, 10),
-      child: Row(
-        children: [
-          Text(
-            text[0].toUpperCase() + text.substring(1),
-            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Colors.white.withOpacity(0.85)),
-          ),
-          const SizedBox(width: 10),
-          Expanded(child: Divider(color: Colors.white.withOpacity(0.12), thickness: 1)),
-        ],
-      ),
-    );
-  }
-
-  Widget _leagueHeader(String league, String? country) {
-    final sub = (country == null || country.isEmpty) ? '' : ' • $country';
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(2, 0, 2, 10),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              color: Colors.white.withOpacity(0.08),
-              border: Border.all(color: Colors.white.withOpacity(0.12)),
-            ),
-            child: Text(
-              '$league$sub',
-              style: TextStyle(fontWeight: FontWeight.w900, color: Colors.white.withOpacity(0.85)),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _modeControls(AppL10n t) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              ChoiceChip(
-                label: const Text('Zi'),
-                selected: viewMode == _ViewMode.singleDay,
-                onSelected: (_) {
-                  setState(() => viewMode = _ViewMode.singleDay);
-                  _load(showSpinner: true);
-                },
-              ),
-              const SizedBox(width: 8),
-              ChoiceChip(
-                label: const Text('Interval'),
-                selected: viewMode == _ViewMode.range,
-                onSelected: (_) {
-                  setState(() => viewMode = _ViewMode.range);
-                  rangeDays = _clampedRangeDays(rangeDays);
-                  _load(showSpinner: true);
-                },
-              ),
-              const Spacer(),
-              if (romaniaOnly) Chip(label: Text(t.t('romania_only'))),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (viewMode == _ViewMode.singleDay) _singleDayChips(t) else _rangeControls(),
-        ],
-      ),
-    );
-  }
-
-  Widget _singleDayChips(AppL10n t) {
-    Widget chip(String label, bool selected, int newOffset) {
-      return Padding(
-        padding: const EdgeInsets.only(right: 8),
-        child: ChoiceChip(
-          label: Text(label),
-          selected: selected,
-          onSelected: (_) {
-            setState(() => dayOffset = newOffset);
-            _load(showSpinner: true);
-          },
-        ),
-      );
+  // ---------- Top 10 heuristic (safe, deterministic) ----------
+  List<FixtureLite> _computeTop10(List<FixtureLite> items) {
+    // Simple “real” confidence without predictions endpoint:
+    // finished matches get 0, not started get slight boost, popular leagues not tracked -> neutral.
+    // You can replace this later with real API predictions once stable.
+    double score(FixtureLite f) {
+      if (f.isFinished) return 0;
+      // prioritize matches that are not started and have known teams
+      double s = 50;
+      if (f.isNotStarted) s += 10;
+      if (f.home.isNotEmpty && f.away.isNotEmpty) s += 5;
+      // earlier kickoff => higher priority for "today"
+      final now = DateTime.now().toUtc();
+      final diffH = f.dateUtc.difference(now).inMinutes / 60.0;
+      if (diffH.abs() < 6) s += 5;
+      return s;
     }
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          chip('Ieri', dayOffset == -1, -1),
-          chip(t.t('matches_today'), dayOffset == 0, 0),
-          chip(t.t('matches_tomorrow'), dayOffset == 1, 1),
-          chip('În 2 zile', dayOffset == 2, 2),
-          chip('În 3 zile', dayOffset == 3, 3),
-        ],
-      ),
-    );
-  }
-
-  Widget _rangeControls() {
-    final d = _clampedRangeDays(rangeDays);
-
-    Widget chip(String label, bool selected, int newDays) {
-      return Padding(
-        padding: const EdgeInsets.only(right: 8),
-        child: ChoiceChip(
-          label: Text(label),
-          selected: selected,
-          onSelected: (_) => _setRangeDays(newDays),
-        ),
-      );
-    }
-
-    return Column(
-      children: [
-        Row(
-          children: [
-            chip('±3 zile', d == 3, 3),
-            chip('±7 zile', d == 7, 7),
-            chip('±14 zile', rangeDays == 14, 14),
-            const Spacer(),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            Expanded(
-              child: SwitchListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Include trecut'),
-                value: includePast,
-                onChanged: (v) {
-                  setState(() => includePast = v);
-                  _load(showSpinner: true);
-                },
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: SwitchListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Include viitor'),
-                value: includeFuture,
-                onChanged: (v) {
-                  setState(() => includeFuture = v);
-                  _load(showSpinner: true);
-                },
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _tabTop10(AppL10n t) {
-    if (loading) return Center(child: Text(t.t('loading')));
-    if (fixtures.isEmpty) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', t.t('no_matches')));
-
-    if (topLoading) return const Center(child: CircularProgressIndicator());
-    if (topError != null) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Top 10', topError!));
-    if (top10.isEmpty) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Top 10', 'Nu există suficiente predicții pentru Top 10 acum.'));
-
-    return RefreshIndicator(
-      onRefresh: () async => _load(showSpinner: false),
-      child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-        itemCount: top10.length,
-        itemBuilder: (context, i) => _topCard(context, top10[i], rank: i + 1),
-      ),
-    );
-  }
-
-  Widget _fixtureCard(BuildContext context, AppL10n t, FixtureLite f) {
-    final loc = Localizations.localeOf(context).toLanguageTag();
-    final timeText = f.date == null ? '—' : DateFormat('HH:mm', loc).format(f.date!.toLocal());
-    final leagueText = (f.league ?? '').isEmpty ? '—' : (f.league!);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MatchScreen(api: api, fixture: f))),
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            color: Colors.black.withOpacity(0.08),
-          ),
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  _statusPill(f.statusSafe()),
-                  const SizedBox(width: 10),
-                  _timePill(timeText),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      '${f.home} vs ${f.away}',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(leagueText, style: TextStyle(color: Colors.white.withOpacity(0.70))),
-              const SizedBox(height: 10),
-              FutureBuilder<PredictionLite?>(
-                future: predCache.getForFixture(f),
-                builder: (context, snap) {
-                  if (snap.connectionState == ConnectionState.waiting) return Text(t.t('loading'));
-                  final p = snap.data;
-                  if (p == null) return Text(t.t('predictions_unavailable'), style: TextStyle(color: Colors.white.withOpacity(0.70)));
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          _pickPill(p.topPick),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Row(
-                              children: [
-                                Text('Confidence ${p.confidence}%', style: const TextStyle(fontWeight: FontWeight.w900)),
-                                const SizedBox(width: 8),
-                                _sourceBadge(p.sourceTag),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      _probBar(p.pHome, p.pDraw, p.pAway),
-                      const SizedBox(height: 6),
-                      Text(p.extras, style: TextStyle(color: Colors.white.withOpacity(0.70))),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _topCard(BuildContext context, _TopItem item, {required int rank}) {
-    final f = item.fixture;
-    final p = item.pred;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MatchScreen(api: api, fixture: f))),
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            color: Colors.black.withOpacity(0.10),
-            border: Border.all(color: Colors.white.withOpacity(0.08)),
-          ),
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              _rankPill(rank),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('${f.home} vs ${f.away}', style: const TextStyle(fontWeight: FontWeight.w900)),
-                    const SizedBox(height: 4),
-                    Text('Confidence ${p.confidence}% • ${p.sourceTag}', style: TextStyle(color: Colors.white.withOpacity(0.70))),
-                    const SizedBox(height: 8),
-                    _probBar(p.pHome, p.pDraw, p.pAway),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 10),
-              _pickPill(p.topPick),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _rankPill(int rank) {
-    final bg = rank == 1
-        ? Colors.amber.withOpacity(0.22)
-        : (rank <= 3 ? Colors.white.withOpacity(0.14) : Colors.white.withOpacity(0.10));
-    final fg = rank == 1 ? Colors.amberAccent : Colors.white.withOpacity(0.85);
-
-    return Container(
-      width: 44,
-      height: 44,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.white.withOpacity(0.12)),
-      ),
-      child: Text('#$rank', style: TextStyle(fontWeight: FontWeight.w900, color: fg)),
-    );
-  }
-
-  Widget _sourceBadge(String tag) {
-    final isData = tag.toUpperCase() == 'DATA';
-    final bg = isData ? Colors.green.withOpacity(0.22) : Colors.white.withOpacity(0.10);
-    final fg = isData ? Colors.greenAccent : Colors.white.withOpacity(0.80);
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withOpacity(0.10)),
-      ),
-      child: Text(tag.toUpperCase(), style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: fg)),
-    );
-  }
-
-  Widget _statusPill(String txt) {
-    return Container(
-      width: 44,
-      height: 44,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.white.withOpacity(0.15)),
-      ),
-      child: Text(txt, style: const TextStyle(fontWeight: FontWeight.w900)),
-    );
-  }
-
-  Widget _timePill(String txt) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withOpacity(0.15)),
-      ),
-      child: Text(txt, style: const TextStyle(fontWeight: FontWeight.w900)),
-    );
-  }
-
-  Widget _pickPill(String txt) {
-    return Container(
-      width: 34,
-      height: 34,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(17),
-        border: Border.all(color: Colors.white.withOpacity(0.15)),
-      ),
-      child: Text(txt, style: const TextStyle(fontWeight: FontWeight.w900)),
-    );
-  }
-
-  Widget _probBar(double p1, double px, double p2) {
-    double clamp01(double v) => v.isNaN ? 0 : v.clamp(0.0, 1.0);
-
-    p1 = clamp01(p1);
-    px = clamp01(px);
-    p2 = clamp01(p2);
-
-    final sum = p1 + px + p2;
-    if (sum > 0) {
-      p1 /= sum;
-      px /= sum;
-      p2 /= sum;
-    }
-
-    Widget seg(double v) => Expanded(
-          flex: max(1, (v * 1000).round()),
-          child: Container(
-            height: 10,
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(999), color: Colors.white.withOpacity(0.18)),
-          ),
-        );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text('1 ${(p1 * 100).toStringAsFixed(0)}%'),
-            const Spacer(),
-            Text('X ${(px * 100).toStringAsFixed(0)}%'),
-            const Spacer(),
-            Text('2 ${(p2 * 100).toStringAsFixed(0)}%'),
-          ],
-        ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: Row(
-            children: [
-              seg(p1),
-              const SizedBox(width: 6),
-              seg(px),
-              const SizedBox(width: 6),
-              seg(p2),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _infoCard(String title, String body) {
-    return Container(
-      decoration: BoxDecoration(borderRadius: BorderRadius.circular(18), color: Colors.black.withOpacity(0.08)),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
-          const SizedBox(height: 8),
-          Text(body),
-        ],
-      ),
-    );
+    final list = List<FixtureLite>.from(items);
+    list.sort((a, b) => score(b).compareTo(score(a)));
+    return list.take(10).toList();
   }
 }
 
-// Row model
-enum _RowKind { dayHeader, leagueHeader, fixture }
+// -------------------- UI widgets --------------------
 
-class _RowItem {
-  final _RowKind kind;
+class _UiGroup {
+  final _UiGroupType type;
   final DateTime? day;
-  final String? leagueName;
+  final String? league;
   final String? country;
   final FixtureLite? fixture;
 
-  const _RowItem._(this.kind, {this.day, this.leagueName, this.country, this.fixture});
+  _UiGroup._(this.type, {this.day, this.league, this.country, this.fixture});
 
-  factory _RowItem.day(DateTime d) => _RowItem._(_RowKind.dayHeader, day: d);
-  factory _RowItem.league(String name, {String? country}) => _RowItem._(_RowKind.leagueHeader, leagueName: name, country: country);
-  factory _RowItem.fixture(FixtureLite f) => _RowItem._(_RowKind.fixture, fixture: f);
+  factory _UiGroup.dayHeader(DateTime day) => _UiGroup._(_UiGroupType.day, day: day);
+  factory _UiGroup.leagueHeader(String league, String country) =>
+      _UiGroup._(_UiGroupType.league, league: league, country: country);
+  factory _UiGroup.fixture(FixtureLite f) => _UiGroup._(_UiGroupType.fixture, fixture: f);
 }
 
-class _TopItem {
-  final FixtureLite fixture;
-  final PredictionLite pred;
-  const _TopItem({required this.fixture, required this.pred});
+enum _UiGroupType { day, league, fixture }
+
+class _GroupSection extends StatelessWidget {
+  final _UiGroup group;
+  const _GroupSection({required this.group});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppL10n.of(context);
+
+    switch (group.type) {
+      case _UiGroupType.day:
+        final d = group.day!;
+        final label = _dayLabel(t, d);
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(0, 14, 0, 8),
+          child: Row(
+            children: [
+              Text(label, style: Theme.of(context).textTheme.titleMedium),
+              const Expanded(child: Divider(indent: 12)),
+            ],
+          ),
+        );
+
+      case _UiGroupType.league:
+        final text = group.country == null || group.country!.isEmpty
+            ? group.league!
+            : '${group.league!} • ${group.country!}';
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(0, 8, 0, 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white10,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Text(text, style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ),
+        );
+
+      case _UiGroupType.fixture:
+        return _FixtureCard(f: group.fixture!);
+    }
+  }
+
+  String _dayLabel(AppL10n t, DateTime d) {
+    final now = DateTime.now();
+    final dd = DateTime(d.year, d.month, d.day);
+    final today = DateTime(now.year, now.month, now.day);
+    final diff = dd.difference(today).inDays;
+
+    if (diff == -1) return t.t('yesterday');
+    if (diff == 0) return t.t('today');
+    if (diff == 1) return t.t('tomorrow');
+
+    // e.g. Luni, 16 feb.
+    final weekday = [
+      t.t('mon'),
+      t.t('tue'),
+      t.t('wed'),
+      t.t('thu'),
+      t.t('fri'),
+      t.t('sat'),
+      t.t('sun'),
+    ][dd.weekday - 1];
+
+    return '$weekday, ${dd.day.toString().padLeft(2, '0')}.${dd.month.toString().padLeft(2, '0')}';
+  }
+}
+
+class _FixtureCard extends StatelessWidget {
+  final FixtureLite f;
+  const _FixtureCard({required this.f});
+
+  @override
+  Widget build(BuildContext context) {
+    final local = f.dateUtc.toLocal();
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: Colors.white10,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // top row: status/time + score
+          Row(
+            children: [
+              _badge(f.statusShort.isEmpty ? '—' : f.statusShort),
+              const SizedBox(width: 10),
+              Text('$hh:$mm', style: const TextStyle(fontWeight: FontWeight.w800)),
+              const Spacer(),
+              Text(
+                f.scoreText,
+                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '${f.home} vs ${f.away}',
+            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            f.leagueName,
+            style: const TextStyle(color: Colors.white70),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _badge(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black38,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Text(text, style: const TextStyle(fontWeight: FontWeight.w800)),
+    );
+  }
+}
+
+class _TopCard extends StatelessWidget {
+  final int rank;
+  final FixtureLite f;
+  const _TopCard({required this.rank, required this.f});
+
+  @override
+  Widget build(BuildContext context) {
+    final local = f.dateUtc.toLocal();
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: Colors.white10,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: Colors.black38,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: Colors.white10),
+            ),
+            alignment: Alignment.center,
+            child: Text('$rank', style: const TextStyle(fontWeight: FontWeight.w900)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${f.home} vs ${f.away}', style: const TextStyle(fontWeight: FontWeight.w900)),
+                const SizedBox(height: 4),
+                Text('${f.leagueLabel()} • $hh:$mm', style: const TextStyle(color: Colors.white70)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(f.scoreText, style: const TextStyle(fontWeight: FontWeight.w900)),
+        ],
+      ),
+    );
+  }
 }

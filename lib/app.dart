@@ -14,14 +14,17 @@ class SurePredictApp extends StatelessWidget {
       title: 'Sure Predict',
       theme: ThemeData.dark(useMaterial3: true),
 
-      // IMPORTANT: delegate-ul nostru trebuie să fie primul
       localizationsDelegates: const [
         AppL10n.delegate,
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      supportedLocales: AppL10n.supportedLocales,
+
+      supportedLocales: const [
+        Locale('ro'),
+        Locale('en'),
+      ],
 
       home: const HomeScreen(),
     );

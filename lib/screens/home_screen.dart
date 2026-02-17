@@ -24,10 +24,10 @@ class _HomeScreenState extends State<HomeScreen> {
   bool loading = true;
   String? errorText;
 
-  // ✅ lista curentă
+  // Lista curentă
   List<FixtureLite> fixtures = const [];
 
-  // ✅ ultimul rezultat bun (stale cache)
+  // Ultimul rezultat bun (stale cache)
   List<FixtureLite> lastGoodFixtures = const [];
   DateTime? lastGoodAt;
 
@@ -58,6 +58,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
   int _clampedRangeDays(int d) => d.clamp(1, _maxRangeDays);
 
+  void _setRangeDays(int d) {
+    final clamped = _clampedRangeDays(d);
+    if (clamped != d) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Limită automată: maxim 7 zile pentru interval.')),
+        );
+      });
+    }
+    setState(() => rangeDays = clamped);
+    _load(showSpinner: true);
+  }
+
   // ---------- API ----------
   Future<List<FixtureLite>> _fixturesByDate(DateTime date, String tz) async {
     final raw = await api.fixturesByDate(date: date, timezone: tz);
@@ -75,7 +89,7 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => errorText = null);
     }
 
-    // NU ștergem predCache înainte să știm că avem succes (reduce “gol după refresh”)
+    // Nu ștergem predCache înainte să știm că avem succes
     setState(() {
       top10 = const [];
       topError = null;
@@ -126,7 +140,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // sort: zi -> ligă -> oră -> echipă
       res.sort((a, b) => _fixtureCompare(a, b));
 
-      // ✅ SUCCESS: actualizăm cache + resetăm pred cache
+      // SUCCESS: reset pred cache
       predCache.clear();
 
       setState(() {
@@ -139,7 +153,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       _buildTop10();
     } catch (e) {
-      // ✅ dacă a eșuat refresh: păstrăm lastGoodFixtures pe ecran
+      // refresh failed -> keep last good list
       setState(() {
         fixtures = lastGoodFixtures;
         loading = false;
@@ -205,10 +219,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // ---------- UI ----------
   void _refreshTapped() {
     final now = DateTime.now();
-    if (_lastRefreshTap != null && now.difference(_lastRefreshTap!).inSeconds < 2) {
-      // debounce: ignore rapid taps
-      return;
-    }
+    if (_lastRefreshTap != null && now.difference(_lastRefreshTap!).inSeconds < 2) return;
     _lastRefreshTap = now;
     _load(showSpinner: false);
   }
@@ -343,7 +354,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         padding: const EdgeInsets.all(12),
         child: Text(
-          'Refresh a eșuat$ts.\n${errorText!}',
+          'Refresh a eșuat$ts.\n$errorText',
           style: TextStyle(color: Colors.white.withOpacity(0.90)),
         ),
       ),
@@ -646,9 +657,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final f = item.fixture;
     final p = item.pred;
 
-    final loc = Localizations.localeOf(context).toLanguageTag();
-    final timeText = f.date == null ? '—' : DateFormat('HH:mm', loc).format(f.date!.toLocal());
-
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: InkWell(
@@ -825,6 +833,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+// Row model
 enum _RowKind { dayHeader, leagueHeader, fixture }
 
 class _RowItem {
@@ -837,8 +846,7 @@ class _RowItem {
   const _RowItem._(this.kind, {this.day, this.leagueName, this.country, this.fixture});
 
   factory _RowItem.day(DateTime d) => _RowItem._(_RowKind.dayHeader, day: d);
-  factory _RowItem.league(String name, {String? country}) =>
-      _RowItem._(_RowKind.leagueHeader, leagueName: name, country: country);
+  factory _RowItem.league(String name, {String? country}) => _RowItem._(_RowKind.leagueHeader, leagueName: name, country: country);
   factory _RowItem.fixture(FixtureLite f) => _RowItem._(_RowKind.fixture, fixture: f);
 }
 

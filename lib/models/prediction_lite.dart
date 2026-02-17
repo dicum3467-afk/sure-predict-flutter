@@ -1,4 +1,3 @@
-// lib/models/prediction_lite.dart
 class PredictionPick {
   final String label; // "1", "X", "2"
   final double prob;  // 0..1
@@ -11,33 +10,20 @@ class PredictionPick {
 class PredictionLite {
   final int fixtureId;
 
-  /// Probabilities (0..1). If missing, they become null.
   final double? pHome;
   final double? pDraw;
   final double? pAway;
 
-  /// From API "predictions.winner": {id, name, comment}
-  /// winnerSide: "home" | "away" | "draw" | null
-  final String? winnerSide;
+  final String? winnerSide; // "home"|"away"|"draw"|null
   final String? winnerName;
   final String? winnerComment;
 
-  /// API "predictions.advice"
   final String? advice;
-
-  /// Under/Over 2.5 if present (often in "predictions.under_over")
   final String? underOver;
-
-  /// Both teams to score if present (often in "predictions.btts")
   final String? btts;
-
-  /// Predicted score if present (API may include keys like "score": {"fulltime":"1-0"} etc.)
   final String? predictedScore;
 
-  /// Smart confidence (0..100) computed from top-2 probability gap
   final int confidence;
-
-  /// Top pick from pHome/pDraw/pAway
   final PredictionPick? topPick;
 
   const PredictionLite({
@@ -67,32 +53,17 @@ class PredictionLite {
     return list;
   }
 
-  /// Parse first element from API-Football /predictions response list.
-  /// The structure typically is:
-  /// {
-  ///   "predictions": {
-  ///      "winner": {...},
-  ///      "win_or_draw": true/false,
-  ///      "under_over": "Over 2.5",
-  ///      "goals": {...},
-  ///      "advice": "...",
-  ///      "percent": {"home":"45%","draw":"28%","away":"27%"}
-  ///   },
-  ///   "teams": {...}, "league": {...}, "comparison": {...}, ...
-  /// }
   factory PredictionLite.fromApiFootballPrediction({
     required int fixtureId,
     required Map<String, dynamic> obj,
   }) {
     final pred = (obj['predictions'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
 
-    // percent: {"home":"45%","draw":"28%","away":"27%"}
     final percent = (pred['percent'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
 
     double? parsePct(dynamic v) {
       if (v == null) return null;
       final s = v.toString().trim();
-      // Accept "45%" or "45.0%" or "45"
       final cleaned = s.replaceAll('%', '');
       final numVal = double.tryParse(cleaned);
       if (numVal == null) return null;
@@ -103,19 +74,14 @@ class PredictionLite {
     final pDraw = parsePct(percent['draw']);
     final pAway = parsePct(percent['away']);
 
-    // winner
     final winner = (pred['winner'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
     final winnerName = winner['name']?.toString();
     final winnerComment = winner['comment']?.toString();
 
-    // winnerSide best-effort:
-    // If winner.id matches home/away team id => home/away.
-    // If winnerName is "Draw" => draw.
     String? winnerSide;
     if (winnerName != null && winnerName.toLowerCase() == 'draw') {
       winnerSide = 'draw';
     } else {
-      // try detect home/away from obj['teams']
       final teams = (obj['teams'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
       final home = (teams['home'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
       final away = (teams['away'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
@@ -130,17 +96,14 @@ class PredictionLite {
     final underOver = pred['under_over']?.toString();
     final btts = pred['btts']?.toString();
 
-    // predicted score (best-effort)
     String? predictedScore;
     final score = (pred['score'] as Map?)?.cast<String, dynamic>();
     if (score != null) {
-      // often has "fulltime": "1-0"
       predictedScore = score['fulltime']?.toString() ??
           score['halftime']?.toString() ??
           score['exact']?.toString();
     }
 
-    // compute top pick + confidence (gap between top2)
     PredictionPick? topPick;
     int confidence = 0;
 
@@ -155,12 +118,8 @@ class PredictionLite {
       final top = picks[0].prob;
       final second = picks.length > 1 ? picks[1].prob : 0.0;
 
-      // confidence heuristic:
-      // base = top probability
-      // boost = gap between top and second
       final base = top * 60.0;
       final gap = (top - second).clamp(0.0, 1.0) * 80.0;
-
       confidence = (base + gap).round().clamp(0, 100);
     }
 
@@ -181,7 +140,6 @@ class PredictionLite {
     );
   }
 
-  /// Convenience for UI: show "1 45% | X 28% | 2 27%"
   String format1X2() {
     if (!has1x2) return '—';
     final a = (pHome! * 100).round();

@@ -12,25 +12,13 @@ class SurePredictApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Sure Predict',
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-      ),
-
-      // ✅ Delegates core + delegate-ul tău
+      theme: ThemeData.dark(useMaterial3: true),
       localizationsDelegates: const [
-        AppL10n.delegate,
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-
-      // ✅ RO + EN (fără AppL10n.supportedLocales)
-      supportedLocales: const [
-        Locale('ro'),
-        Locale('en'),
-      ],
-
+      supportedLocales: AppL10n.supportedLocales,
       home: const HomeScreen(),
     );
   }

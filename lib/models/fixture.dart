@@ -1,59 +1,91 @@
 class FixtureLite {
   final int id;
-  final String home;
-  final String away;
 
-  // IMPORTANT pentru Expert mode (formă + H2H)
   final int homeId;
   final int awayId;
 
-  final String league;
+  final String home;
+  final String away;
 
-  final DateTime date; // kick-off local
-  final String statusShort; // FT, NS, 1H, HT etc.
+  final String? league;       // ex: "Liga 1"
+  final int? leagueId;        // ex: 283
+  final String? country;      // ex: "Romania"
+
+  final DateTime? date;       // kickoff
+  final String? statusShort;  // NS / FT / 1H / HT etc.
+
+  // opțional (nu e folosit obligatoriu)
   final int? goalsHome;
   final int? goalsAway;
 
-  FixtureLite({
+  const FixtureLite({
     required this.id,
-    required this.home,
-    required this.away,
     required this.homeId,
     required this.awayId,
-    required this.league,
-    required this.date,
-    required this.statusShort,
-    required this.goalsHome,
-    required this.goalsAway,
+    required this.home,
+    required this.away,
+    this.league,
+    this.leagueId,
+    this.country,
+    this.date,
+    this.statusShort,
+    this.goalsHome,
+    this.goalsAway,
   });
 
-  bool get isFinished => statusShort == 'FT' || statusShort == 'AET' || statusShort == 'PEN';
-  bool get isLive => const {'1H', '2H', 'HT', 'ET', 'P', 'LIVE'}.contains(statusShort);
+  /// Parser robust pentru obiectul din API-Football (fixture item).
+  /// Acceptă map-uri cu structura:
+  /// { fixture: { id, date, status:{short} }, league:{id,name,country}, teams:{home:{id,name},away:{...}}, goals:{home,away} }
+  factory FixtureLite.fromApiFootball(Map<String, dynamic> m) {
+    final fixture = (m['fixture'] is Map) ? (m['fixture'] as Map).cast<String, dynamic>() : <String, dynamic>{};
+    final league = (m['league'] is Map) ? (m['league'] as Map).cast<String, dynamic>() : <String, dynamic>{};
+    final teams = (m['teams'] is Map) ? (m['teams'] as Map).cast<String, dynamic>() : <String, dynamic>{};
+    final homeT = (teams['home'] is Map) ? (teams['home'] as Map).cast<String, dynamic>() : <String, dynamic>{};
+    final awayT = (teams['away'] is Map) ? (teams['away'] as Map).cast<String, dynamic>() : <String, dynamic>{};
 
-  static FixtureLite fromApi(Map<String, dynamic> item) {
-    final fixture = item['fixture'] as Map<String, dynamic>;
-    final teams = item['teams'] as Map<String, dynamic>;
-    final league = item['league'] as Map<String, dynamic>;
-    final goals = (item['goals'] ?? {}) as Map<String, dynamic>;
-    final status = (fixture['status'] ?? {}) as Map<String, dynamic>;
+    final status = (fixture['status'] is Map) ? (fixture['status'] as Map).cast<String, dynamic>() : <String, dynamic>{};
 
-    final homeTeam = teams['home'] as Map<String, dynamic>;
-    final awayTeam = teams['away'] as Map<String, dynamic>;
+    final goals = (m['goals'] is Map) ? (m['goals'] as Map).cast<String, dynamic>() : <String, dynamic>{};
 
-    final dateStr = (fixture['date'] ?? '').toString();
-    final date = DateTime.tryParse(dateStr)?.toLocal() ?? DateTime.now();
+    int asInt(dynamic v, {int fallback = 0}) {
+      if (v is int) return v;
+      return int.tryParse('$v') ?? fallback;
+    }
+
+    String asStr(dynamic v, {String fallback = ''}) {
+      if (v is String) return v;
+      if (v == null) return fallback;
+      return '$v';
+    }
+
+    DateTime? asDate(dynamic v) {
+      if (v == null) return null;
+      try {
+        return DateTime.parse('$v');
+      } catch (_) {
+        return null;
+      }
+    }
 
     return FixtureLite(
-      id: fixture['id'] as int,
-      home: (homeTeam['name'] ?? '').toString(),
-      away: (awayTeam['name'] ?? '').toString(),
-      homeId: homeTeam['id'] as int,
-      awayId: awayTeam['id'] as int,
-      league: (league['name'] ?? '').toString(),
-      date: date,
-      statusShort: (status['short'] ?? '').toString(),
-      goalsHome: goals['home'] is int ? goals['home'] as int : int.tryParse('${goals['home']}'),
-      goalsAway: goals['away'] is int ? goals['away'] as int : int.tryParse('${goals['away']}'),
+      id: asInt(fixture['id']),
+      homeId: asInt(homeT['id']),
+      awayId: asInt(awayT['id']),
+      home: asStr(homeT['name'], fallback: 'Home'),
+      away: asStr(awayT['name'], fallback: 'Away'),
+      league: asStr(league['name'], fallback: ''),
+      leagueId: league['id'] == null ? null : asInt(league['id']),
+      country: asStr(league['country'], fallback: ''),
+      date: asDate(fixture['date']),
+      statusShort: asStr(status['short'], fallback: ''),
+      goalsHome: goals['home'] == null ? null : asInt(goals['home']),
+      goalsAway: goals['away'] == null ? null : asInt(goals['away']),
     );
   }
+
+  /// Helper pentru filtre simple
+  String leagueTextLower() => (league ?? '').toLowerCase();
+
+  /// Status safe
+  String statusSafe() => (statusShort == null || statusShort!.isEmpty) ? 'NS' : statusShort!;
 }

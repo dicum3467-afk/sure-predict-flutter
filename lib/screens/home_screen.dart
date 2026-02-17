@@ -1,155 +1,130 @@
 import 'package:flutter/material.dart';
+
 import '../api/api_football.dart';
 import '../l10n/l10n.dart';
 import '../models/fixture.dart';
 import '../services/prediction_cache.dart';
 import 'match_screen.dart';
 
-enum _Tab { today, tomorrow, romania, last3days, romaniaLast3days }
-
 class HomeScreen extends StatefulWidget {
-  final void Function(Locale? locale) onChangeLanguage;
-  const HomeScreen({super.key, required this.onChangeLanguage});
+  const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
+enum _RangeMode { today, tomorrow, last3 }
+
 class _HomeScreenState extends State<HomeScreen> {
   late final ApiFootball api;
   late final PredictionCache predCache;
 
-  bool loading = true;
-  String? error;
-  List<FixtureLite> fixtures = [];
-  _Tab tab = _Tab.today;
+  _RangeMode mode = _RangeMode.today;
+  bool romaniaOnly = false;
 
-  static const _tz = 'Europe/Bucharest';
-  static const _romaniaLeagueId = 283;
+  bool loading = true;
+  String? errorText;
+  List<FixtureLite> fixtures = const [];
 
   @override
   void initState() {
     super.initState();
-    const key = String.fromEnvironment('APIFOOTBALL_KEY');
-    api = ApiFootball(key);
-    predCache = PredictionCache(api: api, maxConcurrent: 2);
+    api = ApiFootball.fromDartDefine(); // trebuie să existe în clasa ta ApiFootball
+    predCache = PredictionCache(api: api);
     _load();
   }
 
-  DateTime _dateForTab(_Tab t) {
-    final now = DateTime.now();
-    if (t == _Tab.tomorrow) return now.add(const Duration(days: 1));
-    return now;
+  String _ymd(DateTime d) {
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$m-$day';
   }
 
   Future<void> _load() async {
     setState(() {
       loading = true;
-      error = null;
+      errorText = null;
     });
 
-    predCache.clear();
+    try {
+      const tz = 'Europe/Bucharest';
+      final now = DateTime.now();
+      List<FixtureLite> res;
 
-    if (!api.hasKey) {
-      setState(() {
-        loading = false;
-        fixtures = [];
-        error =
-            'Lipsește cheia API (APIFOOTBALL_KEY). Seteaz-o în Codemagic (Environment variables) și rebuild APK.';
-      });
-      return;
-    }
+      if (mode == _RangeMode.today) {
+        res = await api.fixturesByDate(date: _ymd(now), timezone: tz);
+      } else if (mode == _RangeMode.tomorrow) {
+        res = await api.fixturesByDate(date: _ymd(now.add(const Duration(days: 1))), timezone: tz);
+      } else {
+        // ultimele 3 zile (inclusiv azi): [now-2 .. now]
+        final start = _ymd(now.subtract(const Duration(days: 2)));
+        final end = _ymd(now);
+        res = await api.fixturesBetween(start: start, end: end, timezone: tz);
+      }
 
-    // Ultimele 3 zile (toate ligile)
-    if (tab == _Tab.last3days) {
-      final res = await api.fixturesLastDays(daysBack: 3, timezone: _tz);
-      if (!mounted) return;
-
-      if (!res.isOk) {
-        setState(() {
-          loading = false;
-          fixtures = [];
-          error = res.error;
-        });
-        return;
+      if (romaniaOnly) {
+        // în funcție de modelul tău, filtrează după country/league
+        // aici filtrăm după textul ligii (safe)
+        res = res.where((f) => (f.league ?? '').toLowerCase().contains('romania')).toList();
       }
 
       setState(() {
-        fixtures = (res.data ?? []).map(FixtureLite.fromApi).toList();
+        fixtures = res;
         loading = false;
       });
-      return;
-    }
-
-    // România • ultimele 3 zile
-    if (tab == _Tab.romaniaLast3days) {
-      final res = await api.fixturesLastDays(
-        daysBack: 3,
-        timezone: _tz,
-        leagueId: _romaniaLeagueId,
-      );
-      if (!mounted) return;
-
-      if (!res.isOk) {
-        setState(() {
-          loading = false;
-          fixtures = [];
-          error = res.error;
-        });
-        return;
-      }
-
+    } catch (e) {
       setState(() {
-        fixtures = (res.data ?? []).map(FixtureLite.fromApi).toList();
+        errorText = e.toString();
         loading = false;
       });
-      return;
     }
+  }
 
-    // Azi / Mâine / România (după dată)
-    final date = _dateForTab(tab);
-
-    final res = await api.fixturesByDate(
-      date: date,
-      timezone: _tz,
-      leagueId: tab == _Tab.romania ? _romaniaLeagueId : null,
+  void _openFilters() {
+    final t = AppL10n.of(context);
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (_) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Text(t.t('filters'), style: Theme.of(context).textTheme.titleLarge),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        romaniaOnly = false;
+                      });
+                      Navigator.pop(context);
+                      _load();
+                    },
+                    child: Text(t.t('reset')),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: romaniaOnly,
+                onChanged: (v) {
+                  setState(() => romaniaOnly = v);
+                  Navigator.pop(context);
+                  _load();
+                },
+                title: Text(t.t('romania_only')),
+                subtitle: Text(t.t('romania_only_hint')),
+              ),
+            ],
+          ),
+        );
+      },
     );
-
-    if (!mounted) return;
-
-    if (!res.isOk) {
-      setState(() {
-        loading = false;
-        fixtures = [];
-        error = res.error;
-      });
-      return;
-    }
-
-    setState(() {
-      fixtures = (res.data ?? []).map(FixtureLite.fromApi).toList();
-      loading = false;
-    });
-
-    // fallback: dacă azi e gol, încearcă mâine
-    if (tab == _Tab.today && fixtures.isEmpty) {
-      final res2 = await api.fixturesByDate(
-        date: date.add(const Duration(days: 1)),
-        timezone: _tz,
-      );
-      if (!mounted) return;
-
-      if (res2.isOk) {
-        final f2 = (res2.data ?? []).map(FixtureLite.fromApi).toList();
-        if (f2.isNotEmpty) {
-          setState(() {
-            tab = _Tab.tomorrow;
-            fixtures = f2;
-            error = null;
-          });
-        }
-      }
-    }
   }
 
   @override
@@ -157,21 +132,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final t = AppL10n.of(context);
 
     String title;
-    switch (tab) {
-      case _Tab.today:
-        title = t.t('todayMatches');
+    switch (mode) {
+      case _RangeMode.today:
+        title = t.t('matches_today');
         break;
-      case _Tab.tomorrow:
-        title = 'Meciuri mâine';
+      case _RangeMode.tomorrow:
+        title = t.t('matches_tomorrow');
         break;
-      case _Tab.romania:
-        title = 'România • SuperLiga';
-        break;
-      case _Tab.last3days:
-        title = 'Ultimele 3 zile';
-        break;
-      case _Tab.romaniaLast3days:
-        title = 'România • ultimele 3 zile';
+      case _RangeMode.last3:
+        title = t.t('last_3_days');
         break;
     }
 
@@ -179,144 +148,150 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: Text(title),
         actions: [
-          PopupMenuButton<_Tab>(
+          IconButton(
+            tooltip: t.t('filters'),
+            onPressed: _openFilters,
             icon: const Icon(Icons.tune),
-            onSelected: (v) {
-              setState(() => tab = v);
-              _load();
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: _Tab.today, child: Text('Azi')),
-              PopupMenuItem(value: _Tab.tomorrow, child: Text('Mâine')),
-              PopupMenuItem(value: _Tab.romania, child: Text('România (SuperLiga)')),
-              PopupMenuItem(value: _Tab.last3days, child: Text('Ultimele 3 zile')),
-              PopupMenuItem(value: _Tab.romaniaLast3days, child: Text('România • ultimele 3 zile')),
-            ],
           ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.language),
-            onSelected: (v) {
-              if (v == 'ro') widget.onChangeLanguage(const Locale('ro'));
-              if (v == 'en') widget.onChangeLanguage(const Locale('en'));
-              if (v == 'sys') widget.onChangeLanguage(null);
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'ro', child: Text('Română')),
-              PopupMenuItem(value: 'en', child: Text('English')),
-              PopupMenuItem(value: 'sys', child: Text('System')),
-            ],
+          IconButton(
+            tooltip: t.t('reload'),
+            onPressed: _load,
+            icon: const Icon(Icons.refresh),
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          padding: const EdgeInsets.all(12),
-          children: [
-            if (error != null) _infoCard('Info', error!),
-            if (loading)
-              Center(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 40),
-                  child: Text(t.t('loading')),
-                ),
-              )
-            else if (fixtures.isEmpty && error == null)
-              const Padding(
-                padding: EdgeInsets.only(top: 40),
-                child: Center(child: Text('Nu s-au găsit meciuri pentru selecția curentă.')),
-              )
-            else
-              ..._groupByDay(fixtures).entries.expand((entry) {
-                final dayTitle = entry.key;
-                final list = entry.value;
-                return [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(6, 12, 6, 8),
-                    child: Text(
-                      dayTitle,
-                      style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+      body: loading
+          ? Center(child: Text(t.t('loading')))
+          : errorText != null
+              ? Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: _infoCard('Info', errorText!),
+                )
+              : fixtures.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: _infoCard('Info', t.t('no_matches')),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _load,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+                        itemCount: fixtures.length + 1,
+                        itemBuilder: (context, i) {
+                          if (i == 0) return _rangeChips(t);
+                          final f = fixtures[i - 1];
+                          return _fixtureCard(context, t, f);
+                        },
+                      ),
                     ),
-                  ),
-                  ...list.map((f) => _fixtureCardWithPrediction(context, f)),
-                ];
-              }).toList(),
+    );
+  }
+
+  Widget _rangeChips(AppL10n t) {
+    Widget chip(String label, bool selected, VoidCallback onTap) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: ChoiceChip(
+          label: Text(label),
+          selected: selected,
+          onSelected: (_) => onTap(),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            chip(t.t('matches_today'), mode == _RangeMode.today, () {
+              setState(() => mode = _RangeMode.today);
+              _load();
+            }),
+            chip(t.t('matches_tomorrow'), mode == _RangeMode.tomorrow, () {
+              setState(() => mode = _RangeMode.tomorrow);
+              _load();
+            }),
+            chip(t.t('last_3_days'), mode == _RangeMode.last3, () {
+              setState(() => mode = _RangeMode.last3);
+              _load();
+            }),
+            if (romaniaOnly)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Chip(label: Text(t.t('romania_only'))),
+              ),
           ],
         ),
       ),
     );
   }
 
-  Map<String, List<FixtureLite>> _groupByDay(List<FixtureLite> all) {
-    final map = <String, List<FixtureLite>>{};
-    for (final f in all) {
-      final d = f.date;
-      final key = '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
-      (map[key] ??= []).add(f);
-    }
-    return map;
-  }
-
-  Widget _fixtureCardWithPrediction(BuildContext context, FixtureLite f) {
-    final score = (f.goalsHome != null && f.goalsAway != null) ? '${f.goalsHome}-${f.goalsAway}' : '—';
-
-    final statusBadge = f.isFinished
-        ? 'FT'
-        : f.isLive
-            ? f.statusShort
-            : 'NS';
-
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+  Widget _fixtureCard(BuildContext context, AppL10n t, FixtureLite f) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
         onTap: () {
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => MatchScreen(api: api, fixture: f)),
+            MaterialPageRoute(
+              builder: (_) => MatchScreen(api: api, fixture: f),
+            ),
           );
         },
-        child: Padding(
-          padding: const EdgeInsets.all(12),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            color: Colors.black.withOpacity(0.08),
+          ),
+          padding: const EdgeInsets.all(14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // header row
               Row(
                 children: [
-                  _statusPill(statusBadge),
+                  _statusPill(f.statusShort ?? 'NS'),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       '${f.home} vs ${f.away}',
-                      maxLines: 1,
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Text(score, style: const TextStyle(fontWeight: FontWeight.w900)),
+                  Text(
+                    _scoreText(f),
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                  ),
                 ],
               ),
-              const SizedBox(height: 6),
-              Text(f.league, maxLines: 1, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 8),
+
+              if ((f.league ?? '').isNotEmpty)
+                Text(
+                  f.league!,
+                  style: TextStyle(color: Colors.white.withOpacity(0.70)),
+                ),
+
               const SizedBox(height: 10),
 
               FutureBuilder<PredictionLite?>(
                 future: predCache.getForFixture(f),
                 builder: (context, snap) {
-                  final p = snap.data ?? predCache.peek(f.id);
-
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return Text(t.t('loading'));
+                  }
+                  final p = snap.data;
                   if (p == null) {
-                    if (snap.connectionState == ConnectionState.waiting) {
-                      return Row(
-                        children: const [
-                          SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-                          SizedBox(width: 10),
-                          Text('Calcul AI...'),
-                        ],
-                      );
-                    }
-                    return const Text('Predicții indisponibile');
+                    return Text(
+                      t.t('predictions_unavailable'),
+                      style: TextStyle(color: Colors.white.withOpacity(0.70)),
+                    );
                   }
 
                   return Column(
@@ -324,22 +299,23 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Row(
                         children: [
-                          _predChip(p.topPick),
-                          const SizedBox(width: 8),
-                          Text('Confidence ${p.confidence}%', style: const TextStyle(fontWeight: FontWeight.w800)),
+                          _pickPill(p.topPick),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Confidence ${p.confidence}% (${p.sourceTag})',
+                              style: const TextStyle(fontWeight: FontWeight.w900),
+                            ),
+                          ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      _miniBar(
-                        leftLabel: '1',
-                        midLabel: 'X',
-                        rightLabel: '2',
-                        pLeft: p.pHome,
-                        pMid: p.pDraw,
-                        pRight: p.pAway,
+                      const SizedBox(height: 10),
+                      _probBar(p.pHome, p.pDraw, p.pAway),
+                      const SizedBox(height: 6),
+                      Text(
+                        p.extras,
+                        style: TextStyle(color: Colors.white.withOpacity(0.70)),
                       ),
-                      const SizedBox(height: 8),
-                      Text(p.extras, style: const TextStyle(fontWeight: FontWeight.w700)),
                     ],
                   );
                 },
@@ -351,88 +327,107 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _miniBar({
-    required String leftLabel,
-    required String midLabel,
-    required String rightLabel,
-    required double pLeft,
-    required double pMid,
-    required double pRight,
-  }) {
-    String pct(double v) => '${(v * 100).toStringAsFixed(0)}%';
+  String _scoreText(FixtureLite f) {
+    final sh = f.scoreHome;
+    final sa = f.scoreAway;
+    if (sh == null || sa == null) return '—';
+    return '$sh-$sa';
+  }
 
-    // culori din theme (fără hardcode agresiv)
-    final c1 = Theme.of(context).colorScheme.primary;
-    final cX = Theme.of(context).colorScheme.secondary;
-    final c2 = Theme.of(context).colorScheme.tertiary;
+  Widget _statusPill(String txt) {
+    return Container(
+      width: 44,
+      height: 44,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white.withOpacity(0.15)),
+      ),
+      child: Text(txt, style: const TextStyle(fontWeight: FontWeight.w900)),
+    );
+  }
 
-    int flex(double v) => (v * 1000).round().clamp(1, 1000);
+  Widget _pickPill(String txt) {
+    return Container(
+      width: 34,
+      height: 34,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: Colors.white.withOpacity(0.15)),
+      ),
+      child: Text(txt, style: const TextStyle(fontWeight: FontWeight.w900)),
+    );
+  }
+
+  Widget _probBar(double p1, double px, double p2) {
+    double clamp01(double v) => v.isNaN ? 0 : v.clamp(0.0, 1.0);
+
+    p1 = clamp01(p1);
+    px = clamp01(px);
+    p2 = clamp01(p2);
+
+    final sum = (p1 + px + p2);
+    if (sum > 0) {
+      p1 /= sum;
+      px /= sum;
+      p2 /= sum;
+    }
+
+    Widget seg(double v) => Expanded(
+          flex: max(1, (v * 1000).round()),
+          child: Container(
+            height: 10,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              color: Colors.white.withOpacity(0.18),
+            ),
+          ),
+        );
 
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Row(
+          children: [
+            Text('1 ${(p1 * 100).toStringAsFixed(0)}%'),
+            const Spacer(),
+            Text('X ${(px * 100).toStringAsFixed(0)}%'),
+            const Spacer(),
+            Text('2 ${(p2 * 100).toStringAsFixed(0)}%'),
+          ],
+        ),
+        const SizedBox(height: 6),
         ClipRRect(
           borderRadius: BorderRadius.circular(999),
           child: Row(
             children: [
-              Expanded(flex: flex(pLeft), child: Container(height: 10, color: c1)),
-              Expanded(flex: flex(pMid), child: Container(height: 10, color: cX)),
-              Expanded(flex: flex(pRight), child: Container(height: 10, color: c2)),
+              seg(p1),
+              const SizedBox(width: 6),
+              seg(px),
+              const SizedBox(width: 6),
+              seg(p2),
             ],
           ),
-        ),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            Expanded(child: Text('$leftLabel ${pct(pLeft)}', style: const TextStyle(fontWeight: FontWeight.w700))),
-            Expanded(
-              child: Text('$midLabel ${pct(pMid)}',
-                  textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w700)),
-            ),
-            Expanded(
-              child: Text('$rightLabel ${pct(pRight)}',
-                  textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700)),
-            ),
-          ],
         ),
       ],
     );
   }
 
-  Widget _predChip(String pick) {
+  Widget _infoCard(String title, String body) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(width: 1),
+        borderRadius: BorderRadius.circular(18),
+        color: Colors.black.withOpacity(0.08),
       ),
-      child: Text(pick, style: const TextStyle(fontWeight: FontWeight.w900)),
-    );
-  }
-
-  Widget _statusPill(String s) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(width: 1),
-      ),
-      child: Text(s, style: const TextStyle(fontWeight: FontWeight.w800)),
-    );
-  }
-
-  Widget _infoCard(String title, String msg) {
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 8),
-            Text(msg),
-          ],
-        ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+          const SizedBox(height: 8),
+          Text(body),
+        ],
       ),
     );
   }

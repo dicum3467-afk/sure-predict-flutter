@@ -23,7 +23,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool loading = true;
   String? errorText;
+
+  // ✅ lista curentă
   List<FixtureLite> fixtures = const [];
+
+  // ✅ ultimul rezultat bun (stale cache)
+  List<FixtureLite> lastGoodFixtures = const [];
+  DateTime? lastGoodAt;
 
   bool romaniaOnly = false;
 
@@ -38,44 +44,38 @@ class _HomeScreenState extends State<HomeScreen> {
   String? topError;
   List<_TopItem> top10 = const [];
 
-  static const int _maxRangeDays = 7; // ✅ limită automată
+  static const int _maxRangeDays = 7;
+
+  DateTime? _lastRefreshTap; // debounce refresh taps
 
   @override
   void initState() {
     super.initState();
     api = ApiFootball.fromDartDefine();
     predCache = PredictionCache(api: api);
-    _load();
+    _load(showSpinner: true);
   }
 
   int _clampedRangeDays(int d) => d.clamp(1, _maxRangeDays);
 
-  void _setRangeDays(int d) {
-    final clamped = _clampedRangeDays(d);
-    if (clamped != d) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Limită automată: maxim 7 zile pentru interval.')),
-        );
-      });
-    }
-    setState(() => rangeDays = clamped);
-    _load();
-  }
-
+  // ---------- API ----------
   Future<List<FixtureLite>> _fixturesByDate(DateTime date, String tz) async {
     final raw = await api.fixturesByDate(date: date, timezone: tz);
     return raw.map((m) => FixtureLite.fromApiFootball(m)).toList();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      loading = true;
-      errorText = null;
-    });
+  // ---------- LOAD with stale fallback ----------
+  Future<void> _load({required bool showSpinner}) async {
+    if (showSpinner) {
+      setState(() {
+        loading = true;
+        errorText = null;
+      });
+    } else {
+      setState(() => errorText = null);
+    }
 
-    predCache.clear();
+    // NU ștergem predCache înainte să știm că avem succes (reduce “gol după refresh”)
     setState(() {
       top10 = const [];
       topError = null;
@@ -123,19 +123,27 @@ class _HomeScreenState extends State<HomeScreen> {
         }).toList();
       }
 
-      // Sortare: zi -> ligă -> oră -> echipă
+      // sort: zi -> ligă -> oră -> echipă
       res.sort((a, b) => _fixtureCompare(a, b));
+
+      // ✅ SUCCESS: actualizăm cache + resetăm pred cache
+      predCache.clear();
 
       setState(() {
         fixtures = res;
+        lastGoodFixtures = res;
+        lastGoodAt = DateTime.now();
         loading = false;
+        errorText = null;
       });
 
       _buildTop10();
     } catch (e) {
+      // ✅ dacă a eșuat refresh: păstrăm lastGoodFixtures pe ecran
       setState(() {
-        errorText = e.toString();
+        fixtures = lastGoodFixtures;
         loading = false;
+        errorText = e.toString();
       });
     }
   }
@@ -160,17 +168,10 @@ class _HomeScreenState extends State<HomeScreen> {
     return a.home.toLowerCase().compareTo(b.home.toLowerCase());
   }
 
+  // ---------- TOP 10 ----------
   Future<void> _buildTop10() async {
     if (!mounted) return;
-
-    if (fixtures.isEmpty) {
-      setState(() {
-        top10 = const [];
-        topError = null;
-        topLoading = false;
-      });
-      return;
-    }
+    if (fixtures.isEmpty) return;
 
     setState(() {
       topLoading = true;
@@ -180,7 +181,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final items = <_TopItem>[];
-
       for (final f in fixtures) {
         final p = await predCache.getForFixture(f);
         if (!mounted) return;
@@ -189,6 +189,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       items.sort((a, b) => b.pred.confidence.compareTo(a.pred.confidence));
+
       setState(() {
         top10 = items.take(10).toList();
         topLoading = false;
@@ -199,6 +200,17 @@ class _HomeScreenState extends State<HomeScreen> {
         topLoading = false;
       });
     }
+  }
+
+  // ---------- UI ----------
+  void _refreshTapped() {
+    final now = DateTime.now();
+    if (_lastRefreshTap != null && now.difference(_lastRefreshTap!).inSeconds < 2) {
+      // debounce: ignore rapid taps
+      return;
+    }
+    _lastRefreshTap = now;
+    _load(showSpinner: false);
   }
 
   void _openFilters() {
@@ -220,7 +232,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onPressed: () {
                       setState(() => romaniaOnly = false);
                       Navigator.pop(context);
-                      _load();
+                      _load(showSpinner: true);
                     },
                     child: Text(t.t('reset')),
                   ),
@@ -233,7 +245,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 onChanged: (v) {
                   setState(() => romaniaOnly = v);
                   Navigator.pop(context);
-                  _load();
+                  _load(showSpinner: true);
                 },
                 title: Text(t.t('romania_only')),
                 subtitle: Text(t.t('romania_only_hint')),
@@ -263,7 +275,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           actions: [
             IconButton(onPressed: _openFilters, icon: const Icon(Icons.tune)),
-            IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
+            IconButton(onPressed: _refreshTapped, icon: const Icon(Icons.refresh)),
           ],
         ),
         body: TabBarView(
@@ -293,26 +305,47 @@ class _HomeScreenState extends State<HomeScreen> {
     return parts.join(' .. ');
   }
 
-  // ---- Zi -> Ligă -> Meciuri ----
   Widget _tabMatches(AppL10n t) {
     if (loading) return Center(child: Text(t.t('loading')));
-    if (errorText != null) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', errorText!));
-    if (fixtures.isEmpty) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', t.t('no_matches')));
 
     final rows = _buildRowsDayLeague(fixtures);
 
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: () => _load(showSpinner: false),
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-        itemCount: rows.length + 1,
+        itemCount: rows.length + 2,
         itemBuilder: (context, i) {
-          if (i == 0) return _modeControls(t);
-          final r = rows[i - 1];
+          if (i == 0) return _errorBannerIfNeeded();
+          if (i == 1) return _modeControls(t);
+          final r = rows[i - 2];
+
           if (r.kind == _RowKind.dayHeader) return _dayHeader(context, r.day!);
           if (r.kind == _RowKind.leagueHeader) return _leagueHeader(r.leagueName!, r.country);
           return _fixtureCard(context, t, r.fixture!);
         },
+      ),
+    );
+  }
+
+  Widget _errorBannerIfNeeded() {
+    if (errorText == null) return const SizedBox.shrink();
+
+    final ts = lastGoodAt == null ? '' : ' (ultimul rezultat: ${DateFormat('HH:mm').format(lastGoodAt!)})';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          color: Colors.red.withOpacity(0.12),
+          border: Border.all(color: Colors.red.withOpacity(0.25)),
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Text(
+          'Refresh a eșuat$ts.\n${errorText!}',
+          style: TextStyle(color: Colors.white.withOpacity(0.90)),
+        ),
       ),
     );
   }
@@ -402,7 +435,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 selected: viewMode == _ViewMode.singleDay,
                 onSelected: (_) {
                   setState(() => viewMode = _ViewMode.singleDay);
-                  _load();
+                  _load(showSpinner: true);
                 },
               ),
               const SizedBox(width: 8),
@@ -412,7 +445,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 onSelected: (_) {
                   setState(() => viewMode = _ViewMode.range);
                   rangeDays = _clampedRangeDays(rangeDays);
-                  _load();
+                  _load(showSpinner: true);
                 },
               ),
               const Spacer(),
@@ -435,7 +468,7 @@ class _HomeScreenState extends State<HomeScreen> {
           selected: selected,
           onSelected: (_) {
             setState(() => dayOffset = newOffset);
-            _load();
+            _load(showSpinner: true);
           },
         ),
       );
@@ -490,7 +523,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 value: includePast,
                 onChanged: (v) {
                   setState(() => includePast = v);
-                  _load();
+                  _load(showSpinner: true);
                 },
               ),
             ),
@@ -503,7 +536,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 value: includeFuture,
                 onChanged: (v) {
                   setState(() => includeFuture = v);
-                  _load();
+                  _load(showSpinner: true);
                 },
               ),
             ),
@@ -513,10 +546,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ---- Top 10 ----
   Widget _tabTop10(AppL10n t) {
     if (loading) return Center(child: Text(t.t('loading')));
-    if (errorText != null) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', errorText!));
     if (fixtures.isEmpty) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', t.t('no_matches')));
 
     if (topLoading) return const Center(child: CircularProgressIndicator());
@@ -524,7 +555,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (top10.isEmpty) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Top 10', 'Nu există suficiente predicții pentru Top 10 acum.'));
 
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: () async => _load(showSpinner: false),
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
         itemCount: top10.length,
@@ -533,7 +564,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ---- Cards UI ----
   Widget _fixtureCard(BuildContext context, AppL10n t, FixtureLite f) {
     final loc = Localizations.localeOf(context).toLanguageTag();
     final timeText = f.date == null ? '—' : DateFormat('HH:mm', loc).format(f.date!.toLocal());
@@ -631,39 +661,24 @@ class _HomeScreenState extends State<HomeScreen> {
             border: Border.all(color: Colors.white.withOpacity(0.08)),
           ),
           padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
             children: [
-              Row(
-                children: [
-                  _rankPill(rank),
-                  const SizedBox(width: 10),
-                  _timePill(timeText),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      '${f.home} vs ${f.away}',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  _pickPill(p.topPick),
-                ],
+              _rankPill(rank),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${f.home} vs ${f.away}', style: const TextStyle(fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 4),
+                    Text('Confidence ${p.confidence}% • ${p.sourceTag}', style: TextStyle(color: Colors.white.withOpacity(0.70))),
+                    const SizedBox(height: 8),
+                    _probBar(p.pHome, p.pDraw, p.pAway),
+                  ],
+                ),
               ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Text('Confidence ${p.confidence}%', style: const TextStyle(fontWeight: FontWeight.w900)),
-                  const SizedBox(width: 8),
-                  _sourceBadge(p.sourceTag),
-                ],
-              ),
-              const SizedBox(height: 10),
-              _probBar(p.pHome, p.pDraw, p.pAway),
-              const SizedBox(height: 6),
-              Text(p.extras, style: TextStyle(color: Colors.white.withOpacity(0.70))),
+              const SizedBox(width: 10),
+              _pickPill(p.topPick),
             ],
           ),
         ),
@@ -671,7 +686,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ---- UI helpers ----
   Widget _rankPill(int rank) {
     final bg = rank == 1
         ? Colors.amber.withOpacity(0.22)
@@ -751,7 +765,7 @@ class _HomeScreenState extends State<HomeScreen> {
     px = clamp01(px);
     p2 = clamp01(p2);
 
-    final sum = (p1 + px + p2);
+    final sum = p1 + px + p2;
     if (sum > 0) {
       p1 /= sum;
       px /= sum;
@@ -762,10 +776,7 @@ class _HomeScreenState extends State<HomeScreen> {
           flex: max(1, (v * 1000).round()),
           child: Container(
             height: 10,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              color: Colors.white.withOpacity(0.18),
-            ),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(999), color: Colors.white.withOpacity(0.18)),
           ),
         );
 
@@ -800,10 +811,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _infoCard(String title, String body) {
     return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        color: Colors.black.withOpacity(0.08),
-      ),
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(18), color: Colors.black.withOpacity(0.08)),
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -817,7 +825,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ---- Row items for Zi/Ligă/Meci ----
 enum _RowKind { dayHeader, leagueHeader, fixture }
 
 class _RowItem {

@@ -58,9 +58,7 @@ class _MatchScreenState extends State<MatchScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text('${f.homeName} - ${f.awayName}'),
-        actions: [
-          IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
-        ],
+        actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh))],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -84,10 +82,8 @@ class _MatchScreenState extends State<MatchScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            t.t('predictions_unavailable'),
-            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
-          ),
+          Text(t.t('predictions_unavailable'),
+              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
           const SizedBox(height: 8),
           Text(error ?? '—', style: const TextStyle(color: Colors.white70)),
         ],
@@ -96,7 +92,7 @@ class _MatchScreenState extends State<MatchScreen> {
   }
 
   Widget _predUI(AppL10n t, PredictionLite p) {
-    final picks = p.picks; // sorted desc
+    final picks = p.picks;
     final top = p.topPick;
 
     return ListView(
@@ -122,20 +118,20 @@ class _MatchScreenState extends State<MatchScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('1 ${(p.pHome! * 100).round()}%', style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
-                    Text('X ${(p.pDraw! * 100).round()}%', style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
-                    Text('2 ${(p.pAway! * 100).round()}%', style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                    Text('1 ${(p.pHome! * 100).round()}%',
+                        style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                    Text('X ${(p.pDraw! * 100).round()}%',
+                        style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                    Text('2 ${(p.pAway! * 100).round()}%',
+                        style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
                   ],
                 ),
-              ] else ...[
+              ] else
                 Text(t.t('no_probabilities'), style: const TextStyle(color: Colors.white70)),
-              ],
             ],
           ),
         ),
-
         const SizedBox(height: 12),
-
         _card(
           title: t.t('details'),
           child: Column(
@@ -146,14 +142,11 @@ class _MatchScreenState extends State<MatchScreen> {
               _kv('BTTS', p.btts ?? '—'),
               _kv(t.t('predicted_score'), p.predictedScore ?? '—'),
               _kv(t.t('winner'), p.winnerName ?? '—'),
-              if (p.winnerComment != null && p.winnerComment!.isNotEmpty)
-                _kv(t.t('note'), p.winnerComment!),
+              if (p.winnerComment != null && p.winnerComment!.isNotEmpty) _kv(t.t('note'), p.winnerComment!),
             ],
           ),
         ),
-
         const SizedBox(height: 12),
-
         _card(
           title: t.t('picks_ranked'),
           child: Column(
@@ -170,9 +163,7 @@ class _MatchScreenState extends State<MatchScreen> {
   }
 
   Widget _barRow(PredictionLite p) {
-    // simple segmented bar
     int flex(double x) => (x * 1000).round().clamp(1, 1000);
-
     return ClipRRect(
       borderRadius: BorderRadius.circular(999),
       child: SizedBox(
@@ -191,18 +182,12 @@ class _MatchScreenState extends State<MatchScreen> {
   Widget _pickLine(String label, int pct) {
     return Row(
       children: [
-        SizedBox(
-          width: 26,
-          child: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
-        ),
+        SizedBox(width: 26, child: Text(label, style: const TextStyle(fontWeight: FontWeight.w900))),
         const SizedBox(width: 10),
         Expanded(
           child: ClipRRect(
             borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              value: pct / 100.0,
-              minHeight: 10,
-            ),
+            child: LinearProgressIndicator(value: pct / 100.0, minHeight: 10),
           ),
         ),
         const SizedBox(width: 10),

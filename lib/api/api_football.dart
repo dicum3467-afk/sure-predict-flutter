@@ -10,7 +10,7 @@ class ApiFootball {
     this.baseUrl = 'https://v3.football.api-sports.io',
   });
 
-  /// ✅ folosește --dart-define=APIFOOTBALL_KEY=....
+  /// Folosește --dart-define=APIFOOTBALL_KEY=....
   static ApiFootball fromDartDefine() {
     const k = String.fromEnvironment('APIFOOTBALL_KEY');
     return ApiFootball(apiKey: k);
@@ -42,26 +42,23 @@ class ApiFootball {
     throw Exception('Invalid API response');
   }
 
-  /// ✅ Returnează direct List<Map<String,dynamic>> (ușor de convertit în FixtureLite)
+  /// Returnează List<Map<String,dynamic>> (fixture items)
   Future<List<Map<String, dynamic>>> fixturesByDate({
     required DateTime date,
     required String timezone,
   }) async {
-    final ymd = _ymd(date);
     final j = await _get('/fixtures', query: {
-      'date': ymd,
+      'date': _ymd(date),
       'timezone': timezone,
     });
 
     final resp = j['response'];
     if (resp is! List) return <Map<String, dynamic>>[];
 
-    return resp
-        .whereType<Map>()
-        .map((e) => e.cast<String, dynamic>())
-        .toList();
+    return resp.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
   }
 
+  /// Returnează obiectul brut de la /predictions (primul element din response)
   Future<Map<String, dynamic>?> getPredictions(int fixtureId) async {
     final j = await _get('/predictions', query: {
       'fixture': '$fixtureId',
@@ -73,6 +70,30 @@ class ApiFootball {
     final first = resp.first;
     if (first is Map) return first.cast<String, dynamic>();
     return null;
+  }
+
+  /// ✅ Head-to-Head: folosit de prediction_cache.dart
+  /// API-Football: GET /fixtures/headtohead?h2h=HOME-AWAY&last=5
+  Future<List<Map<String, dynamic>>> headToHead({
+    required int homeTeamId,
+    required int awayTeamId,
+    int last = 5,
+    String? timezone,
+  }) async {
+    final q = <String, String>{
+      'h2h': '$homeTeamId-$awayTeamId',
+      'last': '$last',
+    };
+    if (timezone != null && timezone.isNotEmpty) {
+      q['timezone'] = timezone;
+    }
+
+    final j = await _get('/fixtures/headtohead', query: q);
+
+    final resp = j['response'];
+    if (resp is! List) return <Map<String, dynamic>>[];
+
+    return resp.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
   }
 
   String _ymd(DateTime d) {

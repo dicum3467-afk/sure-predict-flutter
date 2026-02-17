@@ -10,12 +10,16 @@ class PredictionLite {
   final double pAway; // 0..1
 
   final double pBttsYes; // 0..1
-  final double pOver25;  // 0..1
+  final double pOver25; // 0..1
 
-  final int confidence;  // 0..100
-  final String topPick;  // "1", "X", "2"
-  final String label;    // ex: "1 • 67%"
-  final String extras;   // ex: "BTTS 54% • O2.5 48%"
+  final int confidence; // 0..100
+  final String topPick; // "1", "X", "2"
+  final String label; // ex: "1 • 67%"
+  final String extras; // ex: "BTTS 54% • O2.5 48%"
+
+  /// "DATA" = are suficientă formă/H2H
+  /// "BASE" = fallback (date puține / lipsă)
+  final String sourceTag;
 
   const PredictionLite({
     required this.pHome,
@@ -27,6 +31,7 @@ class PredictionLite {
     required this.topPick,
     required this.label,
     required this.extras,
+    required this.sourceTag,
   });
 }
 
@@ -136,16 +141,16 @@ class PredictionCache {
 
     final h2hDelta = h2hData.isNotEmpty ? _h2hDelta(h2hData, f.homeId, f.awayId) : 0;
 
+    // TAG sursă: DATA dacă avem suficientă formă / BASE dacă e fallback
+    final totalGames = hStats.counted + aStats.counted;
+    final bool strongData = totalGames >= 10; // ~5+5 meciuri reale
+    final String sourceTag = strongData ? 'DATA' : 'BASE';
+
     // --- MODEL: lambda Poisson
     const homeAdv = 0.12;
 
-    // forma: PPG 0..3 => -0.12..+0.12
     final formBoost = (hStats.ppg - aStats.ppg).clamp(-3.0, 3.0) * 0.04;
-
-    // trend: -1..+1 => -0.06..+0.06 (ultimele vs primele meciuri)
     final trendBoost = (hStats.trend - aStats.trend).clamp(-1.0, 1.0) * 0.06;
-
-    // H2H: -3..+3 => -0.06..+0.06
     final h2hBoost = (h2hDelta.clamp(-3, 3)) * 0.02;
 
     double lambdaHome =
@@ -200,6 +205,7 @@ class PredictionCache {
       topPick: topPick,
       label: '$topPick • $conf%',
       extras: extras,
+      sourceTag: sourceTag,
     );
   }
 
@@ -219,40 +225,31 @@ class PredictionCache {
     required double topVal,
     required bool hasH2h,
   }) {
-    // 1) Claritatea pick-ului (prob + margine)
-    // topVal: 0.33..0.70 => contribuție mare
-    final clarity = (topVal * 55) + (margin * 45); // 0..~80
+    final clarity = (topVal * 55) + (margin * 45);
 
-    // 2) Puterea formei: diferență PPG + trend
-    final ppgDiff = (hStats.ppg - aStats.ppg).clamp(-3.0, 3.0); // -3..+3
-    final formScore = (ppgDiff.abs() / 3.0) * 16;               // 0..16
+    final ppgDiff = (hStats.ppg - aStats.ppg).clamp(-3.0, 3.0);
+    final formScore = (ppgDiff.abs() / 3.0) * 16;
 
     final trendDiff = (hStats.trend - aStats.trend).clamp(-1.0, 1.0);
-    final trendScore = (trendDiff.abs()) * 10;                  // 0..10
+    final trendScore = (trendDiff.abs()) * 10;
 
-    // 3) Atac vs apărare (diferență netă GF-GA)
     final hNet = (hStats.gfPerGame - hStats.gaPerGame).clamp(-3.0, 3.0);
     final aNet = (aStats.gfPerGame - aStats.gaPerGame).clamp(-3.0, 3.0);
     final netDiff = (hNet - aNet).clamp(-3.0, 3.0);
-    final netScore = (netDiff.abs() / 3.0) * 12;                // 0..12
+    final netScore = (netDiff.abs() / 3.0) * 12;
 
-    // 4) Echilibru goluri așteptate: dacă e foarte dezechilibrat, crește încrederea
     final goalEdge = (lambdaHome - lambdaAway).abs().clamp(0.0, 2.0);
-    final goalEdgeScore = (goalEdge / 2.0) * 10;                // 0..10
+    final goalEdgeScore = (goalEdge / 2.0) * 10;
 
-    // 5) H2H (dacă există)
-    final h2hScore = hasH2h ? (h2hDelta.abs().clamp(0, 3) / 3.0) * 6 : 0.0; // 0..6
+    final h2hScore = hasH2h ? (h2hDelta.abs().clamp(0, 3) / 3.0) * 6 : 0.0;
 
-    // 6) Calitatea datelor (câte meciuri validate)
-    final dataCount = hStats.counted + aStats.counted; // 0..16
-    final dataQuality = (dataCount / 16.0).clamp(0.25, 1.0); // 0.25..1
-    final dataScore = dataQuality * 12; // 3..12
+    final dataCount = hStats.counted + aStats.counted;
+    final dataQuality = (dataCount / 16.0).clamp(0.25, 1.0);
+    final dataScore = dataQuality * 12;
 
-    // 7) Penalizări: dacă e prea “coinflip” (aproape 33/33/33)
-    final entropyPenalty = _entropyPenalty(pHome, pDraw, pAway); // 0..12
+    final entropyPenalty = _entropyPenalty(pHome, pDraw, pAway);
 
-    // 8) Home advantage mic, dar constant (ajută doar dacă pick-ul e 1)
-    final homeAdvScore = homeAdv * 10; // ~1.2
+    final homeAdvScore = homeAdv * 10;
 
     double raw =
         18 +
@@ -266,11 +263,8 @@ class PredictionCache {
         homeAdvScore -
         entropyPenalty;
 
-    // Normalizează: raw cam 20..120
-    // Țintim 40..92 realist; clamp final 0..100
     int conf = raw.round().clamp(35, 94);
 
-    // dacă datele sunt foarte puține, plafonăm
     if (dataCount <= 4) conf = min(conf, 72);
     if (dataCount == 0) conf = min(conf, 66);
 
@@ -278,12 +272,8 @@ class PredictionCache {
   }
 
   double _entropyPenalty(double a, double b, double c) {
-    // penalizează distribuții uniforme
-    // H = -Σ p log p ; maxim la uniform
     double h(double p) => p <= 0 ? 0 : -p * log(p);
     final H = h(a) + h(b) + h(c);
-    // uniform (1/3) => H ~ 1.0986
-    // penalizare 0..12
     final norm = ((H - 0.7) / (1.0986 - 0.7)).clamp(0.0, 1.0);
     return norm * 12;
   }
@@ -356,12 +346,9 @@ class PredictionCache {
     int gf = 0;
     int ga = 0;
 
-    // pentru trend: primele 4 vs ultimele 4
     int pointsFirst = 0, gamesFirst = 0;
     int pointsLast = 0, gamesLast = 0;
 
-    // fixtures vin de obicei descrescător (cele mai recente primele)
-    // ca să fie consistent, extragem până la 8 meciuri valide și apoi calculăm trend pe ordine cronologică
     final valid = <_MiniResult>[];
 
     for (final item in fixtures) {
@@ -391,7 +378,6 @@ class PredictionCache {
       valid.add(_MiniResult(gf: my, ga: op, pts: pts));
     }
 
-    // calcul global
     for (final r in valid) {
       gf += r.gf;
       ga += r.ga;
@@ -399,10 +385,7 @@ class PredictionCache {
       counted++;
     }
 
-    // trend: comparăm PPG primele 4 (mai vechi) vs ultimele 4 (mai noi)
-    // valid e “mai noi primele” => inversăm pentru cronologic
     final chrono = valid.reversed.toList();
-
     for (int i = 0; i < chrono.length; i++) {
       final r = chrono[i];
       if (i < 4) {
@@ -422,7 +405,6 @@ class PredictionCache {
     final ppgFirst = gamesFirst == 0 ? ppg : pointsFirst / gamesFirst;
     final ppgLast = gamesLast == 0 ? ppg : pointsLast / gamesLast;
 
-    // trend: -1..+1 (dacă PPG crește mult, trend pozitiv)
     final trend = ((ppgLast - ppgFirst) / 3.0).clamp(-1.0, 1.0);
 
     return _TeamStats(

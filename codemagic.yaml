@@ -3,6 +3,10 @@ workflows:
     name: Android Release APK
     max_build_duration: 60
 
+    environment:
+      groups:
+        - Default
+
     triggering:
       events:
         - push

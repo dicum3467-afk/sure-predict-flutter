@@ -14,20 +14,32 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-enum _RangeMode { today, tomorrow, last3 }
+/// Mod de afișare: o singură zi sau interval
+enum _ViewMode { singleDay, range }
 
 class _HomeScreenState extends State<HomeScreen> {
   late final ApiFootball api;
   late final PredictionCache predCache;
 
-  _RangeMode mode = _RangeMode.today;
-  bool romaniaOnly = false;
-
   bool loading = true;
   String? errorText;
   List<FixtureLite> fixtures = const [];
 
-  // PRO: Top 10
+  // Filtre
+  bool romaniaOnly = false;
+
+  // UI: mod + selecții
+  _ViewMode viewMode = _ViewMode.singleDay;
+
+  /// pentru single day
+  int dayOffset = 0; // 0=today, 1=tomorrow, -1=yesterday etc.
+
+  /// pentru range
+  int rangeDays = 7; // 3/7/14
+  bool includePast = true;
+  bool includeFuture = true;
+
+  // Top 10
   bool topLoading = false;
   String? topError;
   List<_TopItem> top10 = const [];
@@ -38,13 +50,6 @@ class _HomeScreenState extends State<HomeScreen> {
     api = ApiFootball.fromDartDefine();
     predCache = PredictionCache(api: api);
     _load();
-  }
-
-  String _ymd(DateTime d) {
-    final y = d.year.toString().padLeft(4, '0');
-    final m = d.month.toString().padLeft(2, '0');
-    final day = d.day.toString().padLeft(2, '0');
-    return '$y-$m-$day';
   }
 
   Future<void> _load() async {
@@ -63,16 +68,42 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       const tz = 'Europe/Bucharest';
       final now = DateTime.now();
+
       List<FixtureLite> res;
 
-      if (mode == _RangeMode.today) {
-        res = await api.fixturesByDate(date: _ymd(now), timezone: tz);
-      } else if (mode == _RangeMode.tomorrow) {
-        res = await api.fixturesByDate(date: _ymd(now.add(const Duration(days: 1))), timezone: tz);
+      if (viewMode == _ViewMode.singleDay) {
+        // o singură zi: azi / mâine / ieri etc
+        final date = now.add(Duration(days: dayOffset));
+        res = await api.fixturesByDate(date: date, timezone: tz);
       } else {
-        final start = _ymd(now.subtract(const Duration(days: 2)));
-        final end = _ymd(now);
-        res = await api.fixturesBetween(start: start, end: end, timezone: tz);
+        // interval: N zile pe trecut + azi + N zile pe viitor (configurabil)
+        final days = <DateTime>[];
+
+        // includem trecutul
+        if (includePast) {
+          for (int i = rangeDays; i >= 1; i--) {
+            days.add(now.subtract(Duration(days: i)));
+          }
+        }
+
+        // includem azi mereu în range mode (mai clar pt user)
+        days.add(now);
+
+        // includem viitorul
+        if (includeFuture) {
+          for (int i = 1; i <= rangeDays; i++) {
+            days.add(now.add(Duration(days: i)));
+          }
+        }
+
+        // fetch pe zile (securizat: API-ul tău acceptă DateTime)
+        final combined = <FixtureLite>[];
+        for (final d in days) {
+          final list = await api.fixturesByDate(date: d, timezone: tz);
+          combined.addAll(list);
+        }
+
+        res = combined;
       }
 
       if (romaniaOnly) {
@@ -84,7 +115,6 @@ class _HomeScreenState extends State<HomeScreen> {
         loading = false;
       });
 
-      // după ce avem meciurile, calculăm Top 10
       _buildTop10();
     } catch (e) {
       setState(() {
@@ -114,7 +144,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final items = <_TopItem>[];
 
-      // Preluăm predicțiile (throttle e în PredictionCache)
+      // calc pred pentru toate meciurile (PredictionCache limitează concurența)
       for (final f in fixtures) {
         final p = await predCache.getForFixture(f);
         if (!mounted) return;
@@ -122,14 +152,14 @@ class _HomeScreenState extends State<HomeScreen> {
         items.add(_TopItem(fixture: f, pred: p));
       }
 
-      // sort desc după confidence, apoi după DATA vs BASE, apoi după topVal (implicit via confidence)
       items.sort((a, b) {
         final c = b.pred.confidence.compareTo(a.pred.confidence);
         if (c != 0) return c;
-        // preferă DATA peste BASE la egalitate
+
         final ad = a.pred.sourceTag.toUpperCase() == 'DATA';
         final bd = b.pred.sourceTag.toUpperCase() == 'DATA';
         if (ad != bd) return bd ? 1 : -1;
+
         return 0;
       });
 
@@ -162,9 +192,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   const Spacer(),
                   TextButton(
                     onPressed: () {
-                      setState(() {
-                        romaniaOnly = false;
-                      });
+                      setState(() => romaniaOnly = false);
                       Navigator.pop(context);
                       _load();
                     },
@@ -195,18 +223,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final t = AppL10n.of(context);
 
-    String title;
-    switch (mode) {
-      case _RangeMode.today:
-        title = t.t('matches_today');
-        break;
-      case _RangeMode.tomorrow:
-        title = t.t('matches_tomorrow');
-        break;
-      case _RangeMode.last3:
-        title = t.t('last_3_days');
-        break;
-    }
+    final title = viewMode == _ViewMode.singleDay
+        ? _singleTitle(t)
+        : 'Interval ${_rangeLabel()}';
 
     return DefaultTabController(
       length: 2,
@@ -220,8 +239,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
           actions: [
-            IconButton(tooltip: t.t('filters'), onPressed: _openFilters, icon: const Icon(Icons.tune)),
-            IconButton(tooltip: t.t('reload'), onPressed: _load, icon: const Icon(Icons.refresh)),
+            IconButton(onPressed: _openFilters, icon: const Icon(Icons.tune)),
+            IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
           ],
         ),
         body: TabBarView(
@@ -232,6 +251,22 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+  }
+
+  String _singleTitle(AppL10n t) {
+    if (dayOffset == 0) return t.t('matches_today');
+    if (dayOffset == 1) return t.t('matches_tomorrow');
+    if (dayOffset == -1) return t.t('matches_yesterday');
+    if (dayOffset > 1) return 'Ziua +$dayOffset';
+    return 'Ziua $dayOffset';
+  }
+
+  String _rangeLabel() {
+    final parts = <String>[];
+    if (includePast) parts.add('-$rangeDays');
+    parts.add('0');
+    if (includeFuture) parts.add('+$rangeDays');
+    return parts.join(' .. ');
   }
 
   Widget _tabMatches(AppL10n t) {
@@ -249,16 +284,140 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
         itemCount: fixtures.length + 1,
         itemBuilder: (context, i) {
-          if (i == 0) return _rangeChips(t);
-          final f = fixtures[i - 1];
-          return _fixtureCard(context, t, f);
+          if (i == 0) return _modeControls(t);
+          return _fixtureCard(context, t, fixtures[i - 1]);
         },
       ),
     );
   }
 
+  Widget _modeControls(AppL10n t) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Mode switch
+          Row(
+            children: [
+              ChoiceChip(
+                label: const Text('Zi'),
+                selected: viewMode == _ViewMode.singleDay,
+                onSelected: (_) {
+                  setState(() => viewMode = _ViewMode.singleDay);
+                  _load();
+                },
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text('Interval'),
+                selected: viewMode == _ViewMode.range,
+                onSelected: (_) {
+                  setState(() => viewMode = _ViewMode.range);
+                  _load();
+                },
+              ),
+              const Spacer(),
+              if (romaniaOnly) Chip(label: Text(t.t('romania_only'))),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          if (viewMode == _ViewMode.singleDay) _singleDayChips(t) else _rangeChips(),
+        ],
+      ),
+    );
+  }
+
+  Widget _singleDayChips(AppL10n t) {
+    Widget chip(String label, bool selected, int newOffset) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: ChoiceChip(
+          label: Text(label),
+          selected: selected,
+          onSelected: (_) {
+            setState(() => dayOffset = newOffset);
+            _load();
+          },
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          chip(t.t('matches_yesterday'), dayOffset == -1, -1),
+          chip(t.t('matches_today'), dayOffset == 0, 0),
+          chip(t.t('matches_tomorrow'), dayOffset == 1, 1),
+          chip('În 2 zile', dayOffset == 2, 2),
+          chip('În 3 zile', dayOffset == 3, 3),
+        ],
+      ),
+    );
+  }
+
+  Widget _rangeChips() {
+    Widget chip(String label, bool selected, int newDays) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: ChoiceChip(
+          label: Text(label),
+          selected: selected,
+          onSelected: (_) {
+            setState(() => rangeDays = newDays);
+            _load();
+          },
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            chip('±3 zile', rangeDays == 3, 3),
+            chip('±7 zile', rangeDays == 7, 7),
+            chip('±14 zile', rangeDays == 14, 14),
+            const Spacer(),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: SwitchListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Include trecut'),
+                value: includePast,
+                onChanged: (v) {
+                  setState(() => includePast = v);
+                  _load();
+                },
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: SwitchListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Include viitor'),
+                value: includeFuture,
+                onChanged: (v) {
+                  setState(() => includeFuture = v);
+                  _load();
+                },
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _tabTop10(AppL10n t) {
-    // dacă încă se încarcă meciurile de bază
     if (loading) return Center(child: Text(t.t('loading')));
     if (errorText != null) {
       return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', errorText!));
@@ -267,17 +426,14 @@ class _HomeScreenState extends State<HomeScreen> {
       return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', t.t('no_matches')));
     }
 
-    // top computation
-    if (topLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    if (topLoading) return const Center(child: CircularProgressIndicator());
     if (topError != null) {
       return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Top 10', topError!));
     }
     if (top10.isEmpty) {
       return Padding(
         padding: const EdgeInsets.all(16),
-        child: _infoCard('Top 10', 'Nu am reușit să calculez Top 10 (predicții indisponibile pentru meciurile curente).'),
+        child: _infoCard('Top 10', 'Nu există suficiente predicții pentru Top 10 acum.'),
       );
     }
 
@@ -294,16 +450,10 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.only(bottom: 10),
               child: Row(
                 children: [
-                  Text(
-                    'Top 10 • sortat după Confidence',
-                    style: TextStyle(fontWeight: FontWeight.w900, color: Colors.white.withOpacity(0.85)),
-                  ),
+                  Text('Top 10 • sortat după Confidence',
+                      style: TextStyle(fontWeight: FontWeight.w900, color: Colors.white.withOpacity(0.85))),
                   const Spacer(),
-                  IconButton(
-                    tooltip: 'Recalculează Top 10',
-                    onPressed: _buildTop10,
-                    icon: const Icon(Icons.replay),
-                  )
+                  IconButton(onPressed: _buildTop10, icon: const Icon(Icons.replay)),
                 ],
               ),
             );
@@ -311,39 +461,6 @@ class _HomeScreenState extends State<HomeScreen> {
           final item = top10[i - 1];
           return _topCard(context, t, item, rank: i);
         },
-      ),
-    );
-  }
-
-  Widget _rangeChips(AppL10n t) {
-    Widget chip(String label, bool selected, VoidCallback onTap) {
-      return Padding(
-        padding: const EdgeInsets.only(right: 8),
-        child: ChoiceChip(label: Text(label), selected: selected, onSelected: (_) => onTap()),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            chip(t.t('matches_today'), mode == _RangeMode.today, () {
-              setState(() => mode = _RangeMode.today);
-              _load();
-            }),
-            chip(t.t('matches_tomorrow'), mode == _RangeMode.tomorrow, () {
-              setState(() => mode = _RangeMode.tomorrow);
-              _load();
-            }),
-            chip(t.t('last_3_days'), mode == _RangeMode.last3, () {
-              setState(() => mode = _RangeMode.last3);
-              _load();
-            }),
-            if (romaniaOnly) Padding(padding: const EdgeInsets.only(left: 6), child: Chip(label: Text(t.t('romania_only')))),
-          ],
-        ),
       ),
     );
   }
@@ -377,15 +494,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  Text(_scoreText(f), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                 ],
               ),
               const SizedBox(height: 8),
               if ((f.league ?? '').isNotEmpty)
                 Text(f.league!, style: TextStyle(color: Colors.white.withOpacity(0.70))),
               const SizedBox(height: 10),
-
               FutureBuilder<PredictionLite?>(
                 future: predCache.getForFixture(f),
                 builder: (context, snap) {
@@ -394,7 +508,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (p == null) {
                     return Text(t.t('predictions_unavailable'), style: TextStyle(color: Colors.white.withOpacity(0.70)));
                   }
-
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -474,8 +587,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   Text('Confidence ${p.confidence}%', style: const TextStyle(fontWeight: FontWeight.w900)),
                   const SizedBox(width: 8),
                   _sourceBadge(p.sourceTag),
-                  const Spacer(),
-                  Text(_scoreText(f), style: const TextStyle(fontWeight: FontWeight.w900)),
                 ],
               ),
               const SizedBox(height: 10),
@@ -522,13 +633,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Text(tag.toUpperCase(), style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: fg)),
     );
-  }
-
-  String _scoreText(FixtureLite f) {
-    final sh = f.scoreHome;
-    final sa = f.scoreAway;
-    if (sh == null || sa == null) return '—';
-    return '$sh-$sa';
   }
 
   Widget _statusPill(String txt) {

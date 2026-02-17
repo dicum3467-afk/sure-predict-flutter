@@ -28,7 +28,6 @@ class _HomeScreenState extends State<HomeScreen> {
   bool romaniaOnly = false;
 
   _ViewMode viewMode = _ViewMode.singleDay;
-
   int dayOffset = 0;
 
   int rangeDays = 7;
@@ -39,7 +38,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? topError;
   List<_TopItem> top10 = const [];
 
-  static const int _maxRangeDays = 7;
+  static const int _maxRangeDays = 7; // ✅ limită automată
 
   @override
   void initState() {
@@ -65,33 +64,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _load();
   }
 
-  Future<List<FixtureLite>> _fixturesByDateSafe(DateTime date, String tz) async {
-    final dynamic result = await api.fixturesByDate(date: date, timezone: tz);
-
-    if (result is List<FixtureLite>) return result;
-
-    if (result is List) {
-      if (result.isEmpty) return <FixtureLite>[];
-      if (result.first is Map) {
-        return result
-            .map((e) => FixtureLite.fromApiFootball((e as Map).cast<String, dynamic>()))
-            .toList();
-      }
-    }
-
-    try {
-      final data = result.data;
-      if (data is List) {
-        if (data.isEmpty) return <FixtureLite>[];
-        if (data.first is Map) {
-          return data
-              .map((e) => FixtureLite.fromApiFootball((e as Map).cast<String, dynamic>()))
-              .toList();
-        }
-      }
-    } catch (_) {}
-
-    return <FixtureLite>[];
+  Future<List<FixtureLite>> _fixturesByDate(DateTime date, String tz) async {
+    final raw = await api.fixturesByDate(date: date, timezone: tz);
+    return raw.map((m) => FixtureLite.fromApiFootball(m)).toList();
   }
 
   Future<void> _load() async {
@@ -114,8 +89,7 @@ class _HomeScreenState extends State<HomeScreen> {
       List<FixtureLite> res;
 
       if (viewMode == _ViewMode.singleDay) {
-        final date = now.add(Duration(days: dayOffset));
-        res = await _fixturesByDateSafe(date, tz);
+        res = await _fixturesByDate(now.add(Duration(days: dayOffset)), tz);
       } else {
         final d = _clampedRangeDays(rangeDays);
 
@@ -134,8 +108,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
         final combined = <FixtureLite>[];
         for (final day in days) {
-          final list = await _fixturesByDateSafe(day, tz);
-          combined.addAll(list);
+          combined.addAll(await _fixturesByDate(day, tz));
         }
 
         final seen = <int>{};
@@ -215,17 +188,7 @@ class _HomeScreenState extends State<HomeScreen> {
         items.add(_TopItem(fixture: f, pred: p));
       }
 
-      items.sort((a, b) {
-        final c = b.pred.confidence.compareTo(a.pred.confidence);
-        if (c != 0) return c;
-
-        final ad = a.pred.sourceTag.toUpperCase() == 'DATA';
-        final bd = b.pred.sourceTag.toUpperCase() == 'DATA';
-        if (ad != bd) return bd ? 1 : -1;
-
-        return 0;
-      });
-
+      items.sort((a, b) => b.pred.confidence.compareTo(a.pred.confidence));
       setState(() {
         top10 = items.take(10).toList();
         topLoading = false;
@@ -285,7 +248,6 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final t = AppL10n.of(context);
-
     final title = viewMode == _ViewMode.singleDay ? _singleTitle(t) : 'Interval ${_rangeLabel()}';
 
     return DefaultTabController(
@@ -331,15 +293,11 @@ class _HomeScreenState extends State<HomeScreen> {
     return parts.join(' .. ');
   }
 
-  // ---------- Meciuri: Zi -> Ligă -> Carduri ----------
+  // ---- Zi -> Ligă -> Meciuri ----
   Widget _tabMatches(AppL10n t) {
     if (loading) return Center(child: Text(t.t('loading')));
-    if (errorText != null) {
-      return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', errorText!));
-    }
-    if (fixtures.isEmpty) {
-      return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', t.t('no_matches')));
-    }
+    if (errorText != null) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', errorText!));
+    if (fixtures.isEmpty) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', t.t('no_matches')));
 
     final rows = _buildRowsDayLeague(fixtures);
 
@@ -351,7 +309,6 @@ class _HomeScreenState extends State<HomeScreen> {
         itemBuilder: (context, i) {
           if (i == 0) return _modeControls(t);
           final r = rows[i - 1];
-
           if (r.kind == _RowKind.dayHeader) return _dayHeader(context, r.day!);
           if (r.kind == _RowKind.leagueHeader) return _leagueHeader(r.leagueName!, r.country);
           return _fixtureCard(context, t, r.fixture!);
@@ -518,7 +475,7 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             chip('±3 zile', d == 3, 3),
             chip('±7 zile', d == 7, 7),
-            chip('±14 zile', rangeDays == 14, 14), // se clamp-uiește la 7
+            chip('±14 zile', rangeDays == 14, 14),
             const Spacer(),
           ],
         ),
@@ -556,7 +513,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ---------- Top 10 ----------
+  // ---- Top 10 ----
   Widget _tabTop10(AppL10n t) {
     if (loading) return Center(child: Text(t.t('loading')));
     if (errorText != null) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Info', errorText!));
@@ -564,37 +521,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (topLoading) return const Center(child: CircularProgressIndicator());
     if (topError != null) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Top 10', topError!));
-    if (top10.isEmpty) {
-      return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Top 10', 'Nu există suficiente predicții pentru Top 10 acum.'));
-    }
+    if (top10.isEmpty) return Padding(padding: const EdgeInsets.all(16), child: _infoCard('Top 10', 'Nu există suficiente predicții pentru Top 10 acum.'));
 
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-        itemCount: top10.length + 1,
-        itemBuilder: (context, i) {
-          if (i == 0) {
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Row(
-                children: [
-                  Text('Top 10 • sortat după Confidence',
-                      style: TextStyle(fontWeight: FontWeight.w900, color: Colors.white.withOpacity(0.85))),
-                  const Spacer(),
-                  IconButton(onPressed: _buildTop10, icon: const Icon(Icons.replay)),
-                ],
-              ),
-            );
-          }
-          final item = top10[i - 1];
-          return _topCard(context, item, rank: i);
-        },
+        itemCount: top10.length,
+        itemBuilder: (context, i) => _topCard(context, top10[i], rank: i + 1),
       ),
     );
   }
 
-  // ---------- Cards (UI modern) ----------
+  // ---- Cards UI ----
   Widget _fixtureCard(BuildContext context, AppL10n t, FixtureLite f) {
     final loc = Localizations.localeOf(context).toLanguageTag();
     final timeText = f.date == null ? '—' : DateFormat('HH:mm', loc).format(f.date!.toLocal());
@@ -638,9 +577,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 builder: (context, snap) {
                   if (snap.connectionState == ConnectionState.waiting) return Text(t.t('loading'));
                   final p = snap.data;
-                  if (p == null) {
-                    return Text(t.t('predictions_unavailable'), style: TextStyle(color: Colors.white.withOpacity(0.70)));
-                  }
+                  if (p == null) return Text(t.t('predictions_unavailable'), style: TextStyle(color: Colors.white.withOpacity(0.70)));
+
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -714,8 +652,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   _pickPill(p.topPick),
                 ],
               ),
-              const SizedBox(height: 8),
-              if ((f.league ?? '').isNotEmpty) Text(f.league!, style: TextStyle(color: Colors.white.withOpacity(0.70))),
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -735,7 +671,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ---------- UI helpers ----------
+  // ---- UI helpers ----
   Widget _rankPill(int rank) {
     final bg = rank == 1
         ? Colors.amber.withOpacity(0.22)
@@ -881,7 +817,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ---------- Row items (Zi / Ligă / Meci) ----------
+// ---- Row items for Zi/Ligă/Meci ----
 enum _RowKind { dayHeader, leagueHeader, fixture }
 
 class _RowItem {
@@ -894,7 +830,8 @@ class _RowItem {
   const _RowItem._(this.kind, {this.day, this.leagueName, this.country, this.fixture});
 
   factory _RowItem.day(DateTime d) => _RowItem._(_RowKind.dayHeader, day: d);
-  factory _RowItem.league(String name, {String? country}) => _RowItem._(_RowKind.leagueHeader, leagueName: name, country: country);
+  factory _RowItem.league(String name, {String? country}) =>
+      _RowItem._(_RowKind.leagueHeader, leagueName: name, country: country);
   factory _RowItem.fixture(FixtureLite f) => _RowItem._(_RowKind.fixture, fixture: f);
 }
 

@@ -3,35 +3,34 @@ import 'package:flutter/material.dart';
 import '../api/api_football.dart';
 import '../l10n/l10n.dart';
 import '../models/fixture.dart';
+import '../models/prediction_lite.dart';
+import '../services/prediction_cache.dart';
+import 'match_screen.dart';
 
 enum _ViewTab { matches, top10 }
 enum _Mode { day, range }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
   late final ApiFootball api;
+  final PredictionCache _predCache = PredictionCache();
 
   final String _tz = 'Europe/Bucharest';
 
   _ViewTab _tab = _ViewTab.matches;
   _Mode _mode = _Mode.day;
 
-  /// Day mode: -1=ieri, 0=azi, 1=mâine, 2=în 2 zile
-  int _dayOffset = 0;
-
-  /// Range mode: 3/5/7 (clamp automat max 7)
-  int _rangeDays = 3;
+  int _dayOffset = 0;     // -1 ieri, 0 azi, 1 mâine...
+  int _rangeDays = 3;     // clamp max 7
 
   bool _loading = false;
   String? _error;
 
-  /// Ultimele date bune (ca să nu rămână ecran gol la refresh)
   List<FixtureLite> _lastGood = <FixtureLite>[];
   List<FixtureLite> _fixtures = <FixtureLite>[];
 
@@ -48,8 +47,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+  String _hm(DateTime d) => '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  String _md(DateTime d) => '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
+  String _dowShort(DateTime d, AppL10n t) {
+    // RO/EN scurt
+    final ro = ['Lun', 'Mar', 'Mie', 'Joi', 'Vin', 'Sâm', 'Dum'];
+    final en = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final i = (d.weekday - 1).clamp(0, 6);
+    final code = Localizations.localeOf(context).languageCode;
+    return code == 'en' ? en[i] : ro[i];
+  }
 
-  Future<void> _load({bool force = false}) async {
+  Future<void> _load() async {
     if (_loading) return;
     setState(() {
       _loading = true;
@@ -57,14 +66,12 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     final base = _today();
-
     ApiResult<List<FixtureLite>> res;
 
     if (_mode == _Mode.day) {
       final date = base.add(Duration(days: _dayOffset));
       res = await api.fixturesByDate(date: date, timezone: _tz);
     } else {
-      // clamp max 7 zile
       final days = _rangeDays.clamp(1, 7);
       final start = base;
       final end = base.add(Duration(days: days - 1));
@@ -76,13 +83,11 @@ class _HomeScreenState extends State<HomeScreen> {
     if (res.isOk && res.data != null) {
       final list = res.data!;
       list.sort((a, b) {
-        final ad = a.date;
-        final bd = b.date;
-        final c1 = ad.compareTo(bd);
+        final c1 = a.date.compareTo(b.date);
         if (c1 != 0) return c1;
         final c2 = a.leagueName.toLowerCase().compareTo(b.leagueName.toLowerCase());
         if (c2 != 0) return c2;
-        return a.date.compareTo(b.date);
+        return a.homeName.toLowerCase().compareTo(b.homeName.toLowerCase());
       });
 
       setState(() {
@@ -92,7 +97,7 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     } else {
       setState(() {
-        _fixtures = _lastGood; // păstrează ce era bun înainte
+        _fixtures = _lastGood;
         _error = res.error ?? 'Unknown error';
         _loading = false;
       });
@@ -125,22 +130,11 @@ class _HomeScreenState extends State<HomeScreen> {
     return '${t.t('matches_range')} (${_rangeDays.clamp(1, 7)} ${t.t('days')})';
   }
 
-  String _dowShort(DateTime d) {
-    const ro = ['Lun', 'Mar', 'Mie', 'Joi', 'Vin', 'Sâm', 'Dum'];
-    final i = (d.weekday - 1).clamp(0, 6);
-    return ro[i];
-  }
-
-  String _md(DateTime d) => '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
-
-  String _hm(DateTime d) => '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
-
-  /// Group: Zi -> Ligă -> listă
   List<_DayGroup> _grouped(List<FixtureLite> list) {
     final map = <DateTime, Map<String, List<FixtureLite>>>{};
 
     for (final f in list) {
-      final day = _dateOnly(f.date);
+      final day = _dateOnly(f.date.toLocal());
       map.putIfAbsent(day, () => <String, List<FixtureLite>>{});
       final leagueKey = '${f.leagueName} • ${f.leagueCountry}';
       map[day]!.putIfAbsent(leagueKey, () => <FixtureLite>[]);
@@ -161,11 +155,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<FixtureLite> _top10(List<FixtureLite> all) {
-    // “Top 10” simplu: preferă meciuri care NU sunt terminate + ordonate cronologic
     final copy = List<FixtureLite>.from(all);
     copy.sort((a, b) {
-      final aDone = a.statusShort == 'FT' || a.statusShort == 'AET' || a.statusShort == 'PEN';
-      final bDone = b.statusShort == 'FT' || b.statusShort == 'AET' || b.statusShort == 'PEN';
+      final aDone = a.isFinished;
+      final bDone = b.isFinished;
       if (aDone != bDone) return aDone ? 1 : -1;
       return a.date.compareTo(b.date);
     });
@@ -181,12 +174,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final top10 = _top10(_fixtures);
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: const Color(0xFF070A12),
       appBar: AppBar(
         title: Text(title),
         actions: [
           IconButton(
-            onPressed: _loading ? null : () => _load(force: true),
+            onPressed: _loading ? null : () => _load(),
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -218,17 +211,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(height: 10),
                     if (_mode == _Mode.day)
-                      _DayChips(
-                        selected: _dayOffset,
-                        onPick: _setDayOffset,
-                        t: t,
-                      )
+                      _DayChips(selected: _dayOffset, onPick: _setDayOffset, t: t)
                     else
-                      _RangeChips(
-                        selectedDays: _rangeDays,
-                        onPick: _setRangeDays,
-                        t: t,
-                      ),
+                      _RangeChips(selectedDays: _rangeDays, onPick: _setRangeDays, t: t),
                     const SizedBox(height: 10),
                     if (_error != null)
                       Container(
@@ -256,17 +241,30 @@ class _HomeScreenState extends State<HomeScreen> {
               _Top10Sliver(
                 items: top10,
                 hm: _hm,
+                onTap: (f) => _openMatch(context, f),
+                predCache: _predCache,
+                api: api,
               )
             else
               _MatchesSliver(
                 groups: grouped,
-                dowShort: _dowShort,
+                dowLabel: (d) => _dowShort(d, t),
                 md: _md,
                 hm: _hm,
+                onTap: (f) => _openMatch(context, f),
+                predCache: _predCache,
+                api: api,
               ),
           ],
         ),
       ),
+    );
+  }
+
+  void _openMatch(BuildContext context, FixtureLite f) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => MatchScreen(api: api, fixture: f)),
     );
   }
 }
@@ -276,11 +274,7 @@ class _TabsHeader extends StatelessWidget {
   final ValueChanged<_ViewTab> onChange;
   final AppL10n t;
 
-  const _TabsHeader({
-    required this.current,
-    required this.onChange,
-    required this.t,
-  });
+  const _TabsHeader({required this.current, required this.onChange, required this.t});
 
   @override
   Widget build(BuildContext context) {
@@ -305,10 +299,7 @@ class _TabsHeader extends StatelessWidget {
               children: [
                 Icon(icon, color: Colors.white.withOpacity(active ? 0.95 : 0.65)),
                 const SizedBox(height: 6),
-                Text(
-                  label,
-                  style: TextStyle(color: Colors.white.withOpacity(active ? 0.95 : 0.65)),
-                ),
+                Text(label, style: TextStyle(color: Colors.white.withOpacity(active ? 0.95 : 0.65))),
               ],
             ),
           ),
@@ -341,11 +332,7 @@ class _ModeRow extends StatelessWidget {
   final ValueChanged<_Mode> onMode;
   final AppL10n t;
 
-  const _ModeRow({
-    required this.mode,
-    required this.onMode,
-    required this.t,
-  });
+  const _ModeRow({required this.mode, required this.onMode, required this.t});
 
   @override
   Widget build(BuildContext context) {
@@ -363,10 +350,7 @@ class _ModeRow extends StatelessWidget {
               border: Border.all(color: Colors.white.withOpacity(0.10)),
             ),
             child: Center(
-              child: Text(
-                label,
-                style: TextStyle(color: Colors.white.withOpacity(active ? 0.95 : 0.70)),
-              ),
+              child: Text(label, style: TextStyle(color: Colors.white.withOpacity(active ? 0.95 : 0.70))),
             ),
           ),
         ),
@@ -388,11 +372,7 @@ class _DayChips extends StatelessWidget {
   final ValueChanged<int> onPick;
   final AppL10n t;
 
-  const _DayChips({
-    required this.selected,
-    required this.onPick,
-    required this.t,
-  });
+  const _DayChips({required this.selected, required this.onPick, required this.t});
 
   @override
   Widget build(BuildContext context) {
@@ -420,6 +400,7 @@ class _DayChips extends StatelessWidget {
           chip(t.t('matches_today'), 0),
           chip(t.t('matches_tomorrow'), 1),
           chip('${t.t('in')} 2', 2),
+          chip('${t.t('in')} 3', 3),
         ],
       ),
     );
@@ -431,11 +412,7 @@ class _RangeChips extends StatelessWidget {
   final ValueChanged<int> onPick;
   final AppL10n t;
 
-  const _RangeChips({
-    required this.selectedDays,
-    required this.onPick,
-    required this.t,
-  });
+  const _RangeChips({required this.selectedDays, required this.onPick, required this.t});
 
   @override
   Widget build(BuildContext context) {
@@ -470,15 +447,22 @@ class _RangeChips extends StatelessWidget {
 
 class _MatchesSliver extends StatelessWidget {
   final List<_DayGroup> groups;
-  final String Function(DateTime) dowShort;
+  final String Function(DateTime) dowLabel;
   final String Function(DateTime) md;
   final String Function(DateTime) hm;
 
+  final void Function(FixtureLite) onTap;
+  final PredictionCache predCache;
+  final ApiFootball api;
+
   const _MatchesSliver({
     required this.groups,
-    required this.dowShort,
+    required this.dowLabel,
     required this.md,
     required this.hm,
+    required this.onTap,
+    required this.predCache,
+    required this.api,
   });
 
   @override
@@ -486,9 +470,7 @@ class _MatchesSliver extends StatelessWidget {
     if (groups.isEmpty) {
       return const SliverFillRemaining(
         hasScrollBody: false,
-        child: Center(
-          child: Text('No matches', style: TextStyle(color: Colors.white70)),
-        ),
+        child: Center(child: Text('No matches', style: TextStyle(color: Colors.white70))),
       );
     }
 
@@ -502,7 +484,7 @@ class _MatchesSliver extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${dowShort(g.day)}, ${md(g.day)}',
+                  '${dowLabel(g.day)}, ${md(g.day)}',
                   style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 16, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 10),
@@ -510,6 +492,9 @@ class _MatchesSliver extends StatelessWidget {
                       title: lg.title,
                       items: lg.items,
                       hm: hm,
+                      onTap: onTap,
+                      predCache: predCache,
+                      api: api,
                     )),
               ],
             ),
@@ -525,9 +510,16 @@ class _Top10Sliver extends StatelessWidget {
   final List<FixtureLite> items;
   final String Function(DateTime) hm;
 
+  final void Function(FixtureLite) onTap;
+  final PredictionCache predCache;
+  final ApiFootball api;
+
   const _Top10Sliver({
     required this.items,
     required this.hm,
+    required this.onTap,
+    required this.predCache,
+    required this.api,
   });
 
   @override
@@ -535,9 +527,7 @@ class _Top10Sliver extends StatelessWidget {
     if (items.isEmpty) {
       return const SliverFillRemaining(
         hasScrollBody: false,
-        child: Center(
-          child: Text('Top 10 empty', style: TextStyle(color: Colors.white70)),
-        ),
+        child: Center(child: Text('Top 10 empty', style: TextStyle(color: Colors.white70))),
       );
     }
 
@@ -547,7 +537,14 @@ class _Top10Sliver extends StatelessWidget {
           final f = items[i];
           return Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: _MatchCard(f: f, hm: hm),
+            child: _MatchCard(
+              f: f,
+              hm: hm,
+              onTap: () => onTap(f),
+              predCache: predCache,
+              api: api,
+              showRank: i + 1,
+            ),
           );
         },
         childCount: items.length,
@@ -561,10 +558,17 @@ class _LeagueBlock extends StatelessWidget {
   final List<FixtureLite> items;
   final String Function(DateTime) hm;
 
+  final void Function(FixtureLite) onTap;
+  final PredictionCache predCache;
+  final ApiFootball api;
+
   const _LeagueBlock({
     required this.title,
     required this.items,
     required this.hm,
+    required this.onTap,
+    required this.predCache,
+    required this.api,
   });
 
   @override
@@ -589,7 +593,13 @@ class _LeagueBlock extends StatelessWidget {
           const SizedBox(height: 10),
           ...items.map((f) => Padding(
                 padding: const EdgeInsets.only(bottom: 10),
-                child: _MatchCard(f: f, hm: hm),
+                child: _MatchCard(
+                  f: f,
+                  hm: hm,
+                  onTap: () => onTap(f),
+                  predCache: predCache,
+                  api: api,
+                ),
               )),
         ],
       ),
@@ -600,60 +610,102 @@ class _LeagueBlock extends StatelessWidget {
 class _MatchCard extends StatelessWidget {
   final FixtureLite f;
   final String Function(DateTime) hm;
+  final VoidCallback onTap;
 
-  const _MatchCard({required this.f, required this.hm});
+  final PredictionCache predCache;
+  final ApiFootball api;
 
-  bool get _isFinished => f.statusShort == 'FT' || f.statusShort == 'AET' || f.statusShort == 'PEN';
+  final int? showRank;
+
+  const _MatchCard({
+    required this.f,
+    required this.hm,
+    required this.onTap,
+    required this.predCache,
+    required this.api,
+    this.showRank,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final score = (f.goalsHome != null && f.goalsAway != null) ? '${f.goalsHome}-${f.goalsAway}' : '—';
-    final time = hm(f.date);
+    final score = f.scoreText;
+    final time = hm(f.date.toLocal());
 
+    return InkWell(
+      borderRadius: BorderRadius.circular(22),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: Colors.white.withOpacity(0.10)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _StatusPill(status: f.statusShort, time: time, rank: showRank),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${f.homeName} vs ${f.awayName}',
+                    style: TextStyle(color: Colors.white.withOpacity(0.92), fontSize: 16, fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(f.leagueName, style: TextStyle(color: Colors.white.withOpacity(0.65))),
+                  const SizedBox(height: 10),
+
+                  // ===== AI REAL (cache + API predictions) =====
+                  FutureBuilder<PredictionLite?>(
+                    future: predCache.get(api: api, fixtureId: f.id),
+                    builder: (context, snap) {
+                      final p = snap.data;
+                      if (p == null) {
+                        return Text('AI: —', style: TextStyle(color: Colors.white.withOpacity(0.70), fontWeight: FontWeight.w700));
+                      }
+                      final top = p.topPick;
+                      return Row(
+                        children: [
+                          _miniBadge('AI ${p.confidence}%'),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              p.has1x2 ? p.format1X2() : 'Predicții indisponibile',
+                              style: TextStyle(color: Colors.white.withOpacity(0.70), fontWeight: FontWeight.w700),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (top != null) ...[
+                            const SizedBox(width: 8),
+                            _miniBadge('Top ${top.label}'),
+                          ]
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(score, style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 16, fontWeight: FontWeight.w900)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _miniBadge(String text) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(22),
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(999),
         border: Border.all(color: Colors.white.withOpacity(0.10)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _StatusPill(status: f.statusShort, time: time),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${f.homeName} vs ${f.awayName}',
-                  style: TextStyle(color: Colors.white.withOpacity(0.92), fontSize: 16, fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  f.leagueName,
-                  style: TextStyle(color: Colors.white.withOpacity(0.65)),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  _isFinished ? 'Final: $score' : 'Scor: $score',
-                  style: TextStyle(color: Colors.white.withOpacity(0.70), fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            score,
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.85),
-              fontSize: 16,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ],
-      ),
+      child: Text(text, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
     );
   }
 }
@@ -661,14 +713,15 @@ class _MatchCard extends StatelessWidget {
 class _StatusPill extends StatelessWidget {
   final String status;
   final String time;
+  final int? rank;
 
-  const _StatusPill({required this.status, required this.time});
+  const _StatusPill({required this.status, required this.time, this.rank});
 
   @override
   Widget build(BuildContext context) {
     final s = status.isEmpty ? '—' : status;
     return Container(
-      width: 62,
+      width: 70,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.25),
@@ -677,15 +730,13 @@ class _StatusPill extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Text(
-            s,
-            style: TextStyle(color: Colors.white.withOpacity(0.90), fontWeight: FontWeight.w900),
-          ),
+          if (rank != null) ...[
+            Text('#$rank', style: const TextStyle(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 6),
+          ],
+          Text(s, style: TextStyle(color: Colors.white.withOpacity(0.90), fontWeight: FontWeight.w900)),
           const SizedBox(height: 6),
-          Text(
-            time,
-            style: TextStyle(color: Colors.white.withOpacity(0.65), fontWeight: FontWeight.w700),
-          ),
+          Text(time, style: TextStyle(color: Colors.white.withOpacity(0.65), fontWeight: FontWeight.w700)),
         ],
       ),
     );
@@ -695,13 +746,11 @@ class _StatusPill extends StatelessWidget {
 class _DayGroup {
   final DateTime day;
   final List<_LeagueGroup> leagues;
-
   _DayGroup({required this.day, required this.leagues});
 }
 
 class _LeagueGroup {
   final String title;
   final List<FixtureLite> items;
-
   _LeagueGroup({required this.title, required this.items});
 }

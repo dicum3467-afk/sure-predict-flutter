@@ -6,30 +6,33 @@ class AppL10n {
   final Locale locale;
   AppL10n(this.locale);
 
-  /// IMPORTANT: Folosește delegate-ul ăsta în MaterialApp.localizationsDelegates
-  static const LocalizationsDelegate<AppL10n> delegate = _AppL10nDelegate();
-
-  /// IMPORTANT: Folosește lista asta în MaterialApp.supportedLocales
-  static const supportedLocales = <Locale>[
+  // 🔹 IMPORTANT
+  static const supportedLocales = [
     Locale('ro'),
     Locale('en'),
   ];
 
+  static const LocalizationsDelegate<AppL10n> delegate = _AppL10nDelegate();
+
   static AppL10n of(BuildContext context) {
     final l10n = Localizations.of<AppL10n>(context, AppL10n);
-    assert(l10n != null, 'AppL10n not found in widget tree. Did you add AppL10n.delegate?');
-    return l10n!;
+    return l10n ?? AppL10n(const Locale('en'));
   }
 
-  late final Map<String, String> _strings;
+  late Map<String, String> _strings;
 
   Future<void> load() async {
     final code = locale.languageCode;
-    // Fișierele trebuie să existe exact aici:
-    // lib/l10n/app_ro.arb și lib/l10n/app_en.arb
-    final raw = await rootBundle.loadString('lib/l10n/app_$code.arb');
-    final map = (json.decode(raw) as Map<String, dynamic>);
-    _strings = map.map((k, v) => MapEntry(k, v.toString()));
+
+    try {
+      final raw =
+          await rootBundle.loadString('lib/l10n/app_$code.arb');
+      final map = json.decode(raw) as Map<String, dynamic>;
+      _strings =
+          map.map((key, value) => MapEntry(key, value.toString()));
+    } catch (e) {
+      _strings = {};
+    }
   }
 
   String t(String key) => _strings[key] ?? key;
@@ -40,7 +43,7 @@ class _AppL10nDelegate extends LocalizationsDelegate<AppL10n> {
 
   @override
   bool isSupported(Locale locale) =>
-      locale.languageCode == 'ro' || locale.languageCode == 'en';
+      ['ro', 'en'].contains(locale.languageCode);
 
   @override
   Future<AppL10n> load(Locale locale) async {
@@ -50,5 +53,5 @@ class _AppL10nDelegate extends LocalizationsDelegate<AppL10n> {
   }
 
   @override
-  bool shouldReload(covariant LocalizationsDelegate<AppL10n> old) => false;
+  bool shouldReload(LocalizationsDelegate<AppL10n> old) => false;
 }

@@ -17,15 +17,15 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   late final ApiFootball api;
 
+  // DEBUG: verificăm dacă dart-define intră în APK
+  static const _key = String.fromEnvironment('APIFOOTBALL_KEY');
+
   bool loading = true;
   String? error;
   List<FixtureLite> fixtures = [];
   _Tab tab = _Tab.today;
 
   static const _tz = 'Europe/Bucharest';
-
-  // Romania SuperLiga (Liga 1) is commonly 283 in API-Football.
-  // If your account/endpoint uses a different league id, change here.
   static const _romaniaLeagueId = 283;
 
   @override
@@ -52,17 +52,15 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         loading = false;
         fixtures = [];
-        error = 'Lipsește cheia API (APIFOOTBALL_KEY). Seteaz-o în Codemagic (Environment variables) și rebuild APK.';
+        error =
+            'Lipsește cheia API (APIFOOTBALL_KEY). Seteaz-o în Codemagic (Environment variables) și rebuild APK.';
       });
       return;
     }
 
     // Ultimele 3 zile (toate ligile)
     if (tab == _Tab.last3days) {
-      final res = await api.fixturesLastDays(
-        daysBack: 3,
-        timezone: _tz,
-      );
+      final res = await api.fixturesLastDays(daysBack: 3, timezone: _tz);
       if (!mounted) return;
 
       if (!res.isOk) {
@@ -131,7 +129,7 @@ class _HomeScreenState extends State<HomeScreen> {
       loading = false;
     });
 
-    // Expert fallback: dacă azi e gol, încearcă mâine automat
+    // fallback: dacă azi e gol, încearcă mâine
     if (tab == _Tab.today && fixtures.isEmpty) {
       final res2 = await api.fixturesByDate(
         date: date.add(const Duration(days: 1)),
@@ -213,7 +211,20 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ListView(
           padding: const EdgeInsets.all(12),
           children: [
+            // DEBUG CARD (după ce merge, îl ștergem)
+            Card(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Text(
+                  'DEBUG KEY: ${_key.isEmpty ? "EMPTY" : _key.substring(0, 4)}',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ),
+
             if (error != null) _warnCard('Info', error!),
+
             if (loading)
               Center(
                 child: Padding(
@@ -252,8 +263,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final map = <String, List<FixtureLite>>{};
     for (final f in all) {
       final d = f.date;
-      final key =
-          '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
+      final key = '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
       (map[key] ??= []).add(f);
     }
     return map;

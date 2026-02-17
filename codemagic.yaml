@@ -3,10 +3,6 @@ workflows:
     name: Android Release APK
     max_build_duration: 60
 
-    environment:
-      variables:
-        APIFOOTBALL_KEY: $APIFOOTBALL_KEY
-
     triggering:
       events:
         - push
@@ -18,7 +14,9 @@ workflows:
       - name: Build APK (release)
         script: |
           echo "APIFOOTBALL_KEY_LEN=${#APIFOOTBALL_KEY}"
-          flutter build apk --release -t lib/main_production.dart --dart-define=APIFOOTBALL_KEY=${APIFOOTBALL_KEY}
+          flutter build apk --release \
+            -t lib/main_production.dart \
+            --dart-define=APIFOOTBALL_KEY=${APIFOOTBALL_KEY}
 
     artifacts:
       - build/app/outputs/flutter-apk/app-release.apk

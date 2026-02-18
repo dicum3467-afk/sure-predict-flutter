@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from app.db import get_conn
+frfrom app.routes.leagues import router as leagues_routerom app.db import get_conn
 
 app = FastAPI(title="Sure Predict Backend", version="0.1.0")
 

@@ -1,7 +1,0 @@
-sure-predict-backend/
-  app/
-    __init__.py
-    main.py
-    db.py
-  requirements.txt
-  .env.example

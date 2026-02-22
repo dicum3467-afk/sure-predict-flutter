@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,62 +8,110 @@ class ApiException implements Exception {
   final int? statusCode;
   final String message;
 
-  ApiException(this.statusCode, this.message);
+  ApiException(this.message, {this.statusCode});
 
   @override
-  String toString() =>
-      'ApiException(statusCode: $statusCode, message: $message)';
+  String toString() => 'ApiException(statusCode: $statusCode, message: $message)';
 }
 
 class ApiClient {
   ApiClient({
-    this.baseUrl = 'https://sure-predict-backend.onrender.com',
-    http.Client? httpClient,
-  }) : _http = httpClient ?? http.Client();
+    http.Client? client,
+    String? baseUrl,
+  })  : _client = client ?? http.Client(),
+        baseUrl = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
+            .trim()
+            .replaceAll(RegExp(r'/$'), '');
 
+  final http.Client _client;
   final String baseUrl;
-  final http.Client _http;
 
-  // =========================
-  // GET JSON CU RETRY + TIMEOUT
-  // =========================
-  Future<dynamic> getJson(
-    String path, {
-    Map<String, String>? query,
-    Duration timeout = const Duration(seconds: 15),
-    Duration? cacheTtl, // ✅ IMPORTANT (fix)
-  }) async {
-    final uri = Uri.parse(baseUrl + path).replace(queryParameters: query);
+  Uri _uri(String path, [Map<String, dynamic>? query]) {
+    final q = <String, String>{};
+    if (query != null) {
+      for (final e in query.entries) {
+        final v = e.value;
+        if (v == null) continue;
 
-    const maxAttempts = 3;
-
-    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        final resp = await _http.get(uri).timeout(timeout);
-
-        if (resp.statusCode >= 200 && resp.statusCode < 300) {
-          return jsonDecode(resp.body);
+        if (v is List) {
+          // listele se trimit separat din service (repeat param)
+          continue;
         }
 
-        throw ApiException(resp.statusCode, resp.body);
-      } on SocketException catch (e) {
-        if (attempt == maxAttempts) {
-          throw ApiException(null, 'No internet / DNS error: $e');
-        }
-        await Future.delayed(Duration(seconds: attempt * 2));
-      } on HttpException catch (e) {
-        if (attempt == maxAttempts) {
-          throw ApiException(null, 'HTTP error: $e');
-        }
-        await Future.delayed(Duration(seconds: attempt * 2));
-      } on FormatException catch (e) {
-        throw ApiException(null, 'Bad response format: $e');
-      } on Exception catch (_) {
-        if (attempt == maxAttempts) rethrow;
-        await Future.delayed(Duration(seconds: attempt * 2));
+        final s = v.toString().trim();
+        if (s.isEmpty) continue;
+        q[e.key] = s;
       }
     }
+    return Uri.parse('$baseUrl$path').replace(queryParameters: q.isEmpty ? null : q);
+  }
 
-    throw ApiException(null, 'Unknown error');
+  Future<dynamic> getJson(
+    String path, {
+    Map<String, dynamic>? query,
+    Map<String, String>? headers,
+    Duration timeout = const Duration(seconds: 12),
+    int retries = 2,
+    Duration retryDelay = const Duration(seconds: 2),
+  }) async {
+    final uri = _uri(path, query);
+
+    Object? lastError;
+    for (int attempt = 1; attempt <= (retries + 1); attempt++) {
+      try {
+        final res = await _client
+            .get(
+              uri,
+              headers: {
+                'accept': 'application/json',
+                if (headers != null) ...headers,
+              },
+            )
+            .timeout(timeout);
+
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          String msg = 'HTTP ${res.statusCode}';
+          try {
+            final decoded = jsonDecode(res.body);
+            if (decoded is Map && decoded['detail'] != null) {
+              msg = decoded['detail'].toString();
+            } else {
+              msg = res.body.toString();
+            }
+          } catch (_) {
+            msg = res.body.toString();
+          }
+          throw ApiException(msg, statusCode: res.statusCode);
+        }
+
+        if (res.body.isEmpty) return null;
+        return jsonDecode(utf8.decode(res.bodyBytes));
+      } on TimeoutException catch (e) {
+        lastError = ApiException('Timeout: ${e.message ?? ''}');
+      } on SocketException catch (e) {
+        lastError = ApiException('No internet / DNS error: ${e.message}');
+      } on HttpException catch (e) {
+        lastError = ApiException('HTTP error: ${e.message}');
+      } on FormatException {
+        lastError = ApiException('Invalid JSON response');
+      } on ApiException catch (e) {
+        // 4xx/5xx - de obicei nu merită retry la 4xx, dar facem retry mic oricum
+        lastError = e;
+      } catch (e) {
+        lastError = ApiException('Unknown error: $e');
+      }
+
+      if (attempt <= retries) {
+        await Future.delayed(retryDelay * attempt);
+        continue;
+      }
+      throw lastError!;
+    }
+
+    throw ApiException('Unexpected state');
+  }
+
+  void dispose() {
+    _client.close();
   }
 }

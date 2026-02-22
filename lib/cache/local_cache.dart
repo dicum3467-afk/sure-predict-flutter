@@ -1,52 +1,38 @@
 import 'dart:convert';
-
 import 'package:shared_preferences/shared_preferences.dart';
 
 class LocalCache {
-  LocalCache._();
+  static const _prefix = 'cache:';
 
-  static Future<SharedPreferences> get _prefs async =>
-      SharedPreferences.getInstance();
+  final SharedPreferences _prefs;
+  LocalCache(this._prefs);
 
-  static String _tsKey(String key) => 'cache_ts::$key';
-  static String _valKey(String key) => 'cache_val::$key';
-
-  /// Salvează JSON (ca string) + timestamp
-  static Future<void> setJson(
-    String key,
-    dynamic jsonValue,
-  ) async {
-    final prefs = await _prefs;
-    final encoded = jsonEncode(jsonValue);
-    await prefs.setString(_valKey(key), encoded);
-    await prefs.setInt(_tsKey(key), DateTime.now().millisecondsSinceEpoch);
+  static Future<LocalCache> create() async {
+    final prefs = await SharedPreferences.getInstance();
+    return LocalCache(prefs);
   }
 
-  /// Ia JSON dacă NU e expirat. Returnează null dacă lipsește/expirat.
-  static Future<dynamic> getJson(
-    String key, {
-    required Duration ttl,
-  }) async {
-    final prefs = await _prefs;
-    final ts = prefs.getInt(_tsKey(key));
-    final raw = prefs.getString(_valKey(key));
-    if (ts == null || raw == null) return null;
+  String _k(String key) => '$_prefix$key';
+  String _kTs(String key) => '$_prefix$key:ts';
 
-    final age = DateTime.now().millisecondsSinceEpoch - ts;
-    if (age > ttl.inMilliseconds) return null;
-
-    try {
-      return jsonDecode(raw);
-    } catch (_) {
-      return null;
-    }
+  Future<void> setJson(String key, Object json) async {
+    await _prefs.setString(_k(key), jsonEncode(json));
+    await _prefs.setInt(_kTs(key), DateTime.now().millisecondsSinceEpoch);
   }
 
-  /// Ia JSON chiar dacă e expirat (bun ca fallback la erori).
-  static Future<dynamic> getJsonStale(String key) async {
-    final prefs = await _prefs;
-    final raw = prefs.getString(_valKey(key));
+  /// Returnează JSON (Map/List) dacă:
+  /// - există
+  /// - și nu e expirat (ttl)
+  dynamic getJson(String key, {Duration? ttl}) {
+    final raw = _prefs.getString(_k(key));
     if (raw == null) return null;
+
+    if (ttl != null) {
+      final ts = _prefs.getInt(_kTs(key)) ?? 0;
+      final ageMs = DateTime.now().millisecondsSinceEpoch - ts;
+      if (ageMs > ttl.inMilliseconds) return null;
+    }
+
     try {
       return jsonDecode(raw);
     } catch (_) {
@@ -54,17 +40,15 @@ class LocalCache {
     }
   }
 
-  static Future<void> remove(String key) async {
-    final prefs = await _prefs;
-    await prefs.remove(_tsKey(key));
-    await prefs.remove(_valKey(key));
+  Future<void> remove(String key) async {
+    await _prefs.remove(_k(key));
+    await _prefs.remove(_kTs(key));
   }
 
-  static Future<void> clearAll() async {
-    final prefs = await _prefs;
-    final keys = prefs.getKeys().where((k) => k.startsWith('cache_')).toList();
+  Future<void> clearAll() async {
+    final keys = _prefs.getKeys().where((k) => k.startsWith(_prefix)).toList();
     for (final k in keys) {
-      await prefs.remove(k);
+      await _prefs.remove(k);
     }
   }
 }

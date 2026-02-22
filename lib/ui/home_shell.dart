@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../state/leagues_store.dart';
-import '../state/favorites_store.dart';
 import '../state/fixtures_store.dart';
-import 'leagues_screen.dart';
-import 'favorites_screen.dart';
+import '../state/favorites_store.dart';
+import '../ui/leagues_screen.dart';
+import '../ui/favorites_screen.dart';
+import '../ads/banner_ad_widget.dart';
 
 class HomeShell extends StatefulWidget {
   final LeaguesStore leaguesStore;
@@ -23,35 +24,57 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  int index = 0;
+  int _index = 0;
+
+  late final List<Widget> _pages;
 
   @override
-  Widget build(BuildContext context) {
-    final pages = [
+  void initState() {
+    super.initState();
+
+    _pages = [
+      // 🟢 TAB 1 — LEAGUES
       LeaguesScreen(
         store: widget.leaguesStore,
         favorites: widget.favoritesStore,
       ),
+
+      // ⭐ TAB 2 — FAVORITES
       FavoritesScreen(
         fixturesStore: widget.fixturesStore,
         favoritesStore: widget.favoritesStore,
       ),
     ];
+  }
 
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
-      body: pages[index],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: index,
-        onDestinationSelected: (i) => setState(() => index = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.sports_soccer),
-            label: 'Leagues',
+      body: _pages[_index],
+
+      // 🔥 NAV + ADS
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          NavigationBar(
+            selectedIndex: _index,
+            onDestinationSelected: (i) {
+              setState(() => _index = i);
+            },
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.sports_soccer),
+                label: 'Leagues',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.star),
+                label: 'Favorites',
+              ),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.star),
-            label: 'Favorites',
-          ),
+
+          // 💰 ADMOB BANNER
+          const BannerAdWidget(),
         ],
       ),
     );

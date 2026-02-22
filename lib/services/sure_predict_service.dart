@@ -8,55 +8,64 @@ class SurePredictService {
   SurePredictService(this._api, {LocalCache? cache}) : _cache = cache;
 
   final ApiClient _api;
-  final LocalCache? _cache;
+  LocalCache? _cache;
 
-  /// helper: cheie cache stabilă (include path+query)
-  String _cacheKey(String pathWithQuery) => 'GET:$pathWithQuery';
+  Future<void> initCache() async {
+    _cache ??= await LocalCache.create();
+  }
 
-  Future<List<League>> getLeagues({bool? active}) async {
-    const path = '/leagues';
+  String _key(String path, Map<String, dynamic>? query) {
+    final q = (query ?? {}).entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final qs = q.map((e) => '${e.key}=${e.value}').join('&');
+    return 'sp::$path?$qs';
+  }
+
+  /// cacheFirst=true: dacă există cache valid, îl returnează imediat.
+  /// apoi poți face refresh din UI (force network).
+  Future<List<League>> getLeagues({bool? active, bool cacheFirst = true}) async {
+    await initCache();
+    final path = '/leagues';
     final query = <String, dynamic>{
       if (active != null) 'active': active.toString(),
     };
 
-    // pentru cheie cache: path + query sortat
-    final qs = query.entries.map((e) => '${e.key}=${e.value}').join('&');
-    final key = _cacheKey(qs.isEmpty ? path : '$path?$qs');
+    final cacheKey = _key(path, query);
+    if (cacheFirst) {
+      final cached = _cache!.getJson(cacheKey, ttl: const Duration(hours: 24));
+      if (cached is List) {
+        return cached
+            .whereType<Map>()
+            .map((e) => League.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      }
+    }
 
-    // cacheFirst (rapid) – 6h
-    final cached = _cache?.getJson(key, ttl: const Duration(hours: 6));
-    if (cached is List) {
-      return cached
+    final data = await _api.getJson(path, query: query);
+    if (data is List) {
+      await _cache!.setJson(cacheKey, data);
+      return data
           .whereType<Map>()
           .map((e) => League.fromJson(Map<String, dynamic>.from(e)))
           .toList();
     }
-
-    final data = await _api.getJson(path, query: query);
-
-    if (data is! List) return [];
-    await _cache?.setJson(key, data);
-
-    return data
-        .whereType<Map>()
-        .map((e) => League.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
+    return [];
   }
 
-  /// Construieste query corect:
-  /// /fixtures?league_ids=uuid1&league_ids=uuid2&run_type=initial&limit=50&offset=0...
+  /// Construiește query corect:
+  /// /fixtures?league_ids=a&league_ids=b&run_type=initial&limit=50&offset=0&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
   String buildFixturesPath({
     required List<String> leagueIds,
     String runType = 'initial',
     int limit = 50,
     int offset = 0,
     String? status,
-    String? dateFrom, // YYYY-MM-DD
-    String? dateTo, // YYYY-MM-DD
+    String? dateFrom,
+    String? dateTo,
   }) {
     final ids = leagueIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-
     final parts = <String>[];
+
     for (final id in ids) {
       parts.add('league_ids=${Uri.encodeQueryComponent(id)}');
     }
@@ -78,17 +87,16 @@ class SurePredictService {
     return '/fixtures?${parts.join('&')}';
   }
 
-  /// GET fixtures folosind path complet cu query deja inclus
-  /// cacheFirst: dacă e true, arată imediat din cache (dacă există), apoi tu poți da refresh din UI.
   Future<List<FixtureItem>> getFixturesByUrl(
     String fullPathWithQuery, {
     bool cacheFirst = true,
-    Duration cacheTtl = const Duration(minutes: 10),
+    Duration ttl = const Duration(minutes: 10),
   }) async {
-    final key = _cacheKey(fullPathWithQuery);
+    await initCache();
 
+    final cacheKey = 'sp::$fullPathWithQuery';
     if (cacheFirst) {
-      final cached = _cache?.getJson(key, ttl: cacheTtl);
+      final cached = _cache!.getJson(cacheKey, ttl: ttl);
       if (cached is List) {
         return cached
             .whereType<Map>()
@@ -97,33 +105,30 @@ class SurePredictService {
       }
     }
 
-    final data = await _api.getJson(
-      fullPathWithQuery,
-      // retry/timeout sunt in ApiClient deja
-    );
-
-    if (data is! List) return [];
-    await _cache?.setJson(key, data);
-
-    return data
-        .whereType<Map>()
-        .map((e) => FixtureItem.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
+    final data = await _api.getJson(fullPathWithQuery);
+    if (data is List) {
+      await _cache!.setJson(cacheKey, data);
+      return data
+          .whereType<Map>()
+          .map((e) => FixtureItem.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+    return [];
   }
 
   Future<Prediction?> getPrediction(
     String providerFixtureId, {
     String runType = 'initial',
     bool cacheFirst = true,
-    Duration cacheTtl = const Duration(hours: 1),
   }) async {
+    await initCache();
+
     final path = '/fixtures/$providerFixtureId/prediction';
     final query = {'run_type': runType};
-    final qs = query.entries.map((e) => '${e.key}=${e.value}').join('&');
-    final key = _cacheKey('$path?$qs');
 
+    final cacheKey = _key(path, query);
     if (cacheFirst) {
-      final cached = _cache?.getJson(key, ttl: cacheTtl);
+      final cached = _cache!.getJson(cacheKey, ttl: const Duration(hours: 2));
       if (cached is Map) {
         return Prediction.fromJson(Map<String, dynamic>.from(cached));
       }
@@ -131,7 +136,7 @@ class SurePredictService {
 
     final data = await _api.getJson(path, query: query);
     if (data is Map) {
-      await _cache?.setJson(key, data);
+      await _cache!.setJson(cacheKey, data);
       return Prediction.fromJson(Map<String, dynamic>.from(data));
     }
     return null;

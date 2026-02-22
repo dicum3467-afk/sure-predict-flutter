@@ -8,59 +8,72 @@ class SurePredictService {
   final ApiClient _api;
 
   Future<List<League>> getLeagues({bool? active}) async {
-    final data = await _api.getJson('/leagues', query: {
-      if (active != null) 'active': active.toString(),
-    });
+    final data = await _api.getJson(
+      '/leagues',
+      query: {
+        if (active != null) 'active': active.toString(),
+      },
+    );
 
-    if (data is! List) return <League>[];
+    if (data is! List) return [];
     return data
         .whereType<Map>()
         .map((e) => League.fromJson(Map<String, dynamic>.from(e)))
         .toList();
   }
 
-  /// IMPORTANT:
-  /// Backend-ul vrea `league_ids` ca parametru repetat:
-  /// /fixtures?league_ids=uuid&league_ids=uuid2&run_type=initial&limit=50&offset=0
+  /// Construiește query-ul corect pentru backend:
+  /// /fixtures?league_ids=uuid&league_ids=uuid2&run_type=initial&limit=50&offset=0...
   ///
-  /// De asta construim URL-ul complet (path+query) și apelăm getFixturesByUrl().
+  /// IMPORTANT: league_ids trebuie să fie "repeat param", nu listă JSON.
   String buildFixturesPath({
-    required List<String> leagueUids,
+    required List<String> leagueIds,
     String runType = 'initial',
     int limit = 50,
     int offset = 0,
     String? status,
-    String? dateFrom,
-    String? dateTo,
+    String? dateFrom, // "YYYY-MM-DD"
+    String? dateTo, // "YYYY-MM-DD"
   }) {
-    final ids = leagueUids.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    // curățare + encode
+    final ids = leagueIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
 
-    final otherParams = <String, String>{
-      'run_type': runType,
-      'limit': limit.toString(),
-      'offset': offset.toString(),
-      if (status != null && status.trim().isNotEmpty) 'status': status.trim(),
-      if (dateFrom != null && dateFrom.trim().isNotEmpty) 'date_from': dateFrom.trim(),
-      if (dateTo != null && dateTo.trim().isNotEmpty) 'date_to': dateTo.trim(),
-    };
+    final parts = <String>[];
 
-    final leaguePart = ids.map((e) => 'league_ids=${Uri.encodeQueryComponent(e)}').join('&');
-    final otherPart = otherParams.entries
-        .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
-        .join('&');
+    // league_ids repetat
+    for (final id in ids) {
+      parts.add('league_ids=${Uri.encodeQueryComponent(id)}');
+    }
 
-    final all = [leaguePart, otherPart].where((s) => s.isNotEmpty).join('&');
-    return '/fixtures?$all';
+    // restul query-ului
+    parts.add('run_type=${Uri.encodeQueryComponent(runType)}');
+    parts.add('limit=${Uri.encodeQueryComponent(limit.toString())}');
+    parts.add('offset=${Uri.encodeQueryComponent(offset.toString())}');
+
+    if (status != null && status.trim().isNotEmpty) {
+      parts.add('status=${Uri.encodeQueryComponent(status.trim())}');
+    }
+    if (dateFrom != null && dateFrom.trim().isNotEmpty) {
+      parts.add('date_from=${Uri.encodeQueryComponent(dateFrom.trim())}');
+    }
+    if (dateTo != null && dateTo.trim().isNotEmpty) {
+      parts.add('date_to=${Uri.encodeQueryComponent(dateTo.trim())}');
+    }
+
+    return '/fixtures?${parts.join('&')}';
   }
 
-  /// APEL CORECT pentru query cu `league_ids` repetat:
-  /// îi dăm path complet care include deja `?query`
+  /// Cere fixtures folosind path complet care include deja query.
+  /// Exemplu: "/fixtures?league_ids=...&run_type=...&limit=...&offset=..."
   Future<List<FixtureItem>> getFixturesByUrl(String fullPathWithQuery) async {
-    // ApiClient.getJson acceptă un path. În ApiClient-ul tău, dacă path include '?',
-    // va funcționa pentru că uriString(path, query) nu strică.
+    // ApiClient.getJson construiește singur Uri(baseUrl + path).
+    // Dacă path conține deja '?', e ok.
     final data = await _api.getJson(fullPathWithQuery);
 
-    if (data is! List) return <FixtureItem>[];
+    if (data is! List) return [];
     return data
         .whereType<Map>()
         .map((e) => FixtureItem.fromJson(Map<String, dynamic>.from(e)))

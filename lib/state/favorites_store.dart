@@ -3,36 +3,65 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class FavoritesStore extends ChangeNotifier {
-  static const _key = 'favorite_fixture_ids';
+  static const _key = 'favorites_v1';
 
-  final Set<String> _ids = {};
-  bool _loaded = false;
+  final List<Map<String, dynamic>> items = [];
 
-  bool isFavorite(String fixtureId) => _ids.contains(fixtureId);
+  bool isLoading = false;
+  String? error;
 
-  List<String> get allIds => _ids.toList(growable: false);
+  Future<void> load() async {
+    try {
+      isLoading = true;
+      error = null;
+      notifyListeners();
 
-  Future<void> ensureLoaded() async {
-    if (_loaded) return;
-    _loaded = true;
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_key);
+      items.clear();
 
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList(_key) ?? [];
-    _ids.addAll(raw);
+      if (raw != null && raw.trim().isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          items.addAll(decoded.map((e) => Map<String, dynamic>.from(e as Map)));
+        }
+      }
+    } catch (e) {
+      error = e.toString();
+    } finally {
+      isLoading = false;
+      notifyListeners();
+    }
   }
 
-  Future<void> toggle(String fixtureId) async {
-    await ensureLoaded();
+  Future<void> toggle(Map<String, dynamic> fixture) async {
+    final id = (fixture['provider_fixture_id'] ?? fixture['providerFixtureId'] ?? '').toString();
+    if (id.isEmpty) return;
 
-    if (_ids.contains(fixtureId)) {
-      _ids.remove(fixtureId);
+    final idx = items.indexWhere((e) {
+      final eid = (e['provider_fixture_id'] ?? e['providerFixtureId'] ?? '').toString();
+      return eid == id;
+    });
+
+    if (idx >= 0) {
+      items.removeAt(idx);
     } else {
-      _ids.add(fixtureId);
+      items.add(fixture);
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_key, _ids.toList());
-
+    await _save();
     notifyListeners();
+  }
+
+  bool isFavorite(String providerFixtureId) {
+    return items.any((e) {
+      final eid = (e['provider_fixture_id'] ?? e['providerFixtureId'] ?? '').toString();
+      return eid == providerFixtureId;
+    });
+  }
+
+  Future<void> _save() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_key, jsonEncode(items));
   }
 }

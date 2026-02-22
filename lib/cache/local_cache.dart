@@ -2,53 +2,48 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class LocalCache {
-  static const _prefix = 'cache:';
+  LocalCache(this._prefs);
 
   final SharedPreferences _prefs;
-  LocalCache(this._prefs);
 
   static Future<LocalCache> create() async {
     final prefs = await SharedPreferences.getInstance();
     return LocalCache(prefs);
   }
 
-  String _k(String key) => '$_prefix$key';
-  String _kTs(String key) => '$_prefix$key:ts';
+  String _tsKey(String key) => '${key}__ts';
 
-  Future<void> setJson(String key, Object json) async {
-    await _prefs.setString(_k(key), jsonEncode(json));
-    await _prefs.setInt(_kTs(key), DateTime.now().millisecondsSinceEpoch);
+  Future<void> setJson(String key, Object value) async {
+    final s = jsonEncode(value);
+    await _prefs.setString(key, s);
+    await _prefs.setInt(_tsKey(key), DateTime.now().millisecondsSinceEpoch);
   }
 
-  /// Returnează JSON (Map/List) dacă:
-  /// - există
-  /// - și nu e expirat (ttl)
-  dynamic getJson(String key, {Duration? ttl}) {
-    final raw = _prefs.getString(_k(key));
-    if (raw == null) return null;
+  /// Returnează null dacă nu există sau dacă e expirat (ttl).
+  Object? getJson(String key, {Duration? ttl}) {
+    final s = _prefs.getString(key);
+    if (s == null) return null;
 
     if (ttl != null) {
-      final ts = _prefs.getInt(_kTs(key)) ?? 0;
-      final ageMs = DateTime.now().millisecondsSinceEpoch - ts;
-      if (ageMs > ttl.inMilliseconds) return null;
+      final ts = _prefs.getInt(_tsKey(key));
+      if (ts == null) return null;
+      final age = DateTime.now().millisecondsSinceEpoch - ts;
+      if (age > ttl.inMilliseconds) return null;
     }
 
     try {
-      return jsonDecode(raw);
+      return jsonDecode(s);
     } catch (_) {
       return null;
     }
   }
 
   Future<void> remove(String key) async {
-    await _prefs.remove(_k(key));
-    await _prefs.remove(_kTs(key));
+    await _prefs.remove(key);
+    await _prefs.remove(_tsKey(key));
   }
 
-  Future<void> clearAll() async {
-    final keys = _prefs.getKeys().where((k) => k.startsWith(_prefix)).toList();
-    for (final k in keys) {
-      await _prefs.remove(k);
-    }
+  Future<void> clear() async {
+    await _prefs.clear();
   }
 }

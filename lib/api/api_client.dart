@@ -3,8 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
-
-import '../cache/local_cache.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiException implements Exception {
   final int? statusCode;
@@ -13,152 +12,204 @@ class ApiException implements Exception {
   ApiException(this.message, {this.statusCode});
 
   @override
-  String toString() =>
-      'ApiException(statusCode: $statusCode, message: $message)';
+  String toString() => 'ApiException(statusCode: $statusCode, message: $message)';
+}
+
+/// Cache local simplu (SharedPreferences) pentru GET.
+/// - salvează body + timestamp
+/// - TTL: 10 minute (poți schimba)
+class _SimpleHttpCache {
+  _SimpleHttpCache(this._prefs);
+
+  final SharedPreferences _prefs;
+
+  static const _prefix = 'http_cache_v1::';
+
+  String _key(String url) => '$_prefix$url';
+  String _tsKey(String url) => '${_key(url)}::ts';
+
+  Future<void> put(String url, String body) async {
+    await _prefs.setString(_key(url), body);
+    await _prefs.setInt(_tsKey(url), DateTime.now().millisecondsSinceEpoch);
+  }
+
+  String? getIfFresh(String url, {Duration ttl = const Duration(minutes: 10)}) {
+    final ts = _prefs.getInt(_tsKey(url));
+    final body = _prefs.getString(_key(url));
+    if (ts == null || body == null) return null;
+
+    final age = DateTime.now().millisecondsSinceEpoch - ts;
+    if (age > ttl.inMilliseconds) return null;
+
+    return body;
+  }
+
+  String? getAny(String url) => _prefs.getString(_key(url));
 }
 
 class ApiClient {
   ApiClient({
     http.Client? client,
     String? baseUrl,
+    Duration? timeout,
+    int maxRetries = 3,
+    Duration baseDelay = const Duration(milliseconds: 600),
+    Duration cacheTtl = const Duration(minutes: 10),
+    bool enableCache = true,
   })  : _client = client ?? http.Client(),
-        baseUrl = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
+        baseUri = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
             .trim()
-            .replaceAll(RegExp(r'/+$'), '');
+            .replaceAll(RegExp(r'\/$'), ''),
+        _timeout = timeout ?? const Duration(seconds: 12),
+        _maxRetries = maxRetries,
+        _baseDelay = baseDelay,
+        _cacheTtl = cacheTtl,
+        _enableCache = enableCache;
 
   final http.Client _client;
-  final String baseUrl;
+  final String baseUri;
 
-  static const _timeout = Duration(seconds: 12);
-  static const _maxRetries = 3;
+  final Duration _timeout;
+  final int _maxRetries;
+  final Duration _baseDelay;
+
+  final Duration _cacheTtl;
+  final bool _enableCache;
+
+  _SimpleHttpCache? _cache;
+
+  Future<void> _ensureCache() async {
+    if (!_enableCache) return;
+    _cache ??= _SimpleHttpCache(await SharedPreferences.getInstance());
+  }
 
   Uri _uri(String path, [Map<String, dynamic>? query]) {
     final q = <String, String>{};
 
     if (query != null) {
-      for (final e in query.entries) {
-        final v = e.value;
+      for (final entry in query.entries) {
+        final v = entry.value;
         if (v == null) continue;
-        if (v is List) continue; // listele le tratezi separat în service
+
+        // NOTE: listele (repeat param) sunt construite în service.
+        if (v is List) continue;
+
         final s = v.toString().trim();
         if (s.isEmpty) continue;
-        q[e.key] = s;
+
+        q[entry.key] = s;
       }
     }
 
-    return Uri.parse('$baseUrl$path')
-        .replace(queryParameters: q.isEmpty ? null : q);
+    return Uri.parse('$baseUri$path').replace(queryParameters: q.isEmpty ? null : q);
   }
 
-  /// GET JSON cu:
-  /// - timeout
-  /// - retry + backoff
-  /// - cache local (save pe succes; fallback pe eroare)
-  ///
-  /// cacheKey: dacă nu e dat, se folosește uri.toString()
-  /// cacheTtl: cât timp e "fresh"
-  /// cacheFallbackOnError: dacă pică netul, returnează cache-ul (stale ok)
+  bool _isRetriable(Object e) =>
+      e is SocketException ||
+      e is HttpException ||
+      e is TimeoutException ||
+      (e is ApiException && (e.statusCode == null || e.statusCode! >= 500));
+
+  Duration _backoff(int attempt) {
+    // attempt: 1..N
+    final ms = _baseDelay.inMilliseconds * attempt * attempt; // 1x,4x,9x...
+    return Duration(milliseconds: ms.clamp(300, 6000));
+  }
+
+  Future<http.Response> _getWithRetry(Uri uri, Map<String, String> headers) async {
+    Object? lastError;
+
+    for (int attempt = 1; attempt <= _maxRetries; attempt++) {
+      try {
+        final res = await _client.get(uri, headers: headers).timeout(_timeout);
+        return res;
+      } catch (e) {
+        lastError = e;
+
+        if (attempt == _maxRetries || !_isRetriable(e)) {
+          rethrow;
+        }
+
+        await Future.delayed(_backoff(attempt));
+      }
+    }
+
+    // n-ar trebui să ajungă aici
+    throw lastError ?? ApiException('Unknown network error');
+  }
+
+  dynamic _decodeJsonBody(String body) {
+    if (body.trim().isEmpty) return null;
+    return jsonDecode(body);
+  }
+
   Future<dynamic> getJson(
     String path, {
     Map<String, dynamic>? query,
     Map<String, String>? headers,
-    String? cacheKey,
-    Duration? cacheTtl,
-    bool cacheFallbackOnError = true,
-    bool cacheFirst = false,
   }) async {
+    await _ensureCache();
+
     final uri = _uri(path, query);
-    final key = cacheKey ?? uri.toString();
+    final url = uri.toString();
 
-    // 1) Cache-first (pentru ecrane ca Leagues: apare instant)
-    if (cacheFirst && cacheTtl != null) {
-      final cached = await LocalCache.getJson(key, ttl: cacheTtl);
-      if (cached != null) return cached;
-    }
+    final mergedHeaders = <String, String>{
+      'accept': 'application/json',
+      if (headers != null) ...headers,
+    };
 
-    int attempt = 0;
-    Object? lastError;
+    // 1) dacă avem cache fresh, îl putem folosi când rețeaua e instabilă
+    // (nu-l returnăm direct, doar îl păstrăm ca fallback)
+    final cachedFresh = _enableCache ? _cache?.getIfFresh(url, ttl: _cacheTtl) : null;
 
-    while (attempt < _maxRetries) {
-      attempt++;
+    try {
+      final res = await _getWithRetry(uri, mergedHeaders);
 
-      try {
-        final res = await _client
-            .get(
-              uri,
-              headers: {
-                'accept': 'application/json',
-                if (headers != null) ...headers,
-              },
-            )
-            .timeout(_timeout);
-
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          if (res.body.isEmpty) return null;
-
-          final decoded = jsonDecode(utf8.decode(res.bodyBytes));
-
-          // 2) Cache pe succes
-          if (cacheTtl != null) {
-            await LocalCache.setJson(key, decoded);
-          }
-
-          return decoded;
-        }
-
-        // HTTP error
+      if (res.statusCode < 200 || res.statusCode >= 300) {
         String msg = 'HTTP ${res.statusCode}';
         try {
-          final decoded = jsonDecode(res.body);
+          final decoded = _decodeJsonBody(res.body);
           if (decoded is Map && decoded['detail'] != null) {
             msg = decoded['detail'].toString();
-          } else {
+          } else if (res.body.trim().isNotEmpty) {
             msg = res.body.toString();
           }
         } catch (_) {
-          msg = res.body.toString();
+          if (res.body.trim().isNotEmpty) msg = res.body.toString();
         }
-
         throw ApiException(msg, statusCode: res.statusCode);
-      } on SocketException catch (e) {
-        lastError = ApiException(
-          'Network error (attempt $attempt/$_maxRetries): ${e.message}',
-        );
-      } on TimeoutException catch (_) {
-        lastError = ApiException(
-          'Server slow (attempt $attempt/$_maxRetries)',
-        );
-      } on FormatException {
-        throw ApiException('Invalid JSON response');
-      } on ApiException catch (e) {
-        // pentru 4xx, nu prea are sens retry
-        if (e.statusCode != null &&
-            e.statusCode! >= 400 &&
-            e.statusCode! < 500) {
-          rethrow;
-        }
-        lastError = e;
-      } catch (e) {
-        lastError = e;
       }
 
-      // backoff
-      if (attempt < _maxRetries) {
-        await Future.delayed(Duration(seconds: attempt * 2)); // 2s,4s,6s
+      // salvează în cache
+      if (_enableCache) {
+        await _cache?.put(url, res.body);
       }
-    }
 
-    // 3) Fallback la cache dacă e eroare (DNS / cold start / etc.)
-    if (cacheFallbackOnError && cacheTtl != null) {
-      final stale = await LocalCache.getJsonStale(key);
-      if (stale != null) return stale;
-    }
+      return _decodeJsonBody(utf8.decode(res.bodyBytes));
+    } on SocketException catch (e) {
+      // DNS / no internet
+      if (cachedFresh != null) return _decodeJsonBody(cachedFresh);
 
-    throw lastError ??
-        ApiException('Request failed after $_maxRetries attempts');
+      final any = _enableCache ? _cache?.getAny(url) : null;
+      if (any != null) {
+        // dacă ești ok să arăți date vechi când nu e net:
+        return _decodeJsonBody(any);
+      }
+
+      throw ApiException('No internet / DNS error: ${e.message}');
+    } on TimeoutException catch (_) {
+      if (cachedFresh != null) return _decodeJsonBody(cachedFresh);
+      throw ApiException('Request timeout after ${_timeout.inSeconds}s');
+    } on HttpException catch (e) {
+      if (cachedFresh != null) return _decodeJsonBody(cachedFresh);
+      throw ApiException('HTTP error: ${e.message}');
+    } on ApiException {
+      rethrow;
+    } catch (e) {
+      if (cachedFresh != null) return _decodeJsonBody(cachedFresh);
+      throw ApiException('Unexpected error: $e');
+    }
   }
 
-  void dispose() {
-    _client.close();
-  }
+  void dispose() => _client.close();
 }

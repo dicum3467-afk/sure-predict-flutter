@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../cache/local_cache.dart';
+
 class ApiException implements Exception {
   final int? statusCode;
   final String message;
@@ -20,15 +22,13 @@ class ApiClient {
     http.Client? client,
     String? baseUrl,
   })  : _client = client ?? http.Client(),
-        baseUrl = (baseUrl ??
-                'https://sure-predict-backend.onrender.com')
+        baseUrl = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
             .trim()
             .replaceAll(RegExp(r'/+$'), '');
 
   final http.Client _client;
   final String baseUrl;
 
-  // 🔥 CONFIG
   static const _timeout = Duration(seconds: 12);
   static const _maxRetries = 3;
 
@@ -39,7 +39,7 @@ class ApiClient {
       for (final e in query.entries) {
         final v = e.value;
         if (v == null) continue;
-        if (v is List) continue;
+        if (v is List) continue; // listele le tratezi separat în service
         final s = v.toString().trim();
         if (s.isEmpty) continue;
         q[e.key] = s;
@@ -50,13 +50,31 @@ class ApiClient {
         .replace(queryParameters: q.isEmpty ? null : q);
   }
 
-  /// 🚀 GET cu retry + exponential backoff
+  /// GET JSON cu:
+  /// - timeout
+  /// - retry + backoff
+  /// - cache local (save pe succes; fallback pe eroare)
+  ///
+  /// cacheKey: dacă nu e dat, se folosește uri.toString()
+  /// cacheTtl: cât timp e "fresh"
+  /// cacheFallbackOnError: dacă pică netul, returnează cache-ul (stale ok)
   Future<dynamic> getJson(
     String path, {
     Map<String, dynamic>? query,
     Map<String, String>? headers,
+    String? cacheKey,
+    Duration? cacheTtl,
+    bool cacheFallbackOnError = true,
+    bool cacheFirst = false,
   }) async {
     final uri = _uri(path, query);
+    final key = cacheKey ?? uri.toString();
+
+    // 1) Cache-first (pentru ecrane ca Leagues: apare instant)
+    if (cacheFirst && cacheTtl != null) {
+      final cached = await LocalCache.getJson(key, ttl: cacheTtl);
+      if (cached != null) return cached;
+    }
 
     int attempt = 0;
     Object? lastError;
@@ -75,13 +93,20 @@ class ApiClient {
             )
             .timeout(_timeout);
 
-        // ✅ HTTP OK
         if (res.statusCode >= 200 && res.statusCode < 300) {
           if (res.body.isEmpty) return null;
-          return jsonDecode(utf8.decode(res.bodyBytes));
+
+          final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+
+          // 2) Cache pe succes
+          if (cacheTtl != null) {
+            await LocalCache.setJson(key, decoded);
+          }
+
+          return decoded;
         }
 
-        // ❌ HTTP error
+        // HTTP error
         String msg = 'HTTP ${res.statusCode}';
         try {
           final decoded = jsonDecode(res.body);
@@ -95,38 +120,38 @@ class ApiClient {
         }
 
         throw ApiException(msg, statusCode: res.statusCode);
-      }
-
-      // 🌐 DNS / network
-      on SocketException catch (e) {
+      } on SocketException catch (e) {
         lastError = ApiException(
           'Network error (attempt $attempt/$_maxRetries): ${e.message}',
         );
-      }
-
-      // ⏱️ timeout
-      on TimeoutException catch (_) {
+      } on TimeoutException catch (_) {
         lastError = ApiException(
           'Server slow (attempt $attempt/$_maxRetries)',
         );
-      }
-
-      // ❌ HTTP exception
-      on HttpException catch (e) {
-        lastError = ApiException('HTTP error: ${e.message}');
-        rethrow; // nu are sens retry
-      }
-
-      // ❌ JSON invalid
-      on FormatException {
+      } on FormatException {
         throw ApiException('Invalid JSON response');
+      } on ApiException catch (e) {
+        // pentru 4xx, nu prea are sens retry
+        if (e.statusCode != null &&
+            e.statusCode! >= 400 &&
+            e.statusCode! < 500) {
+          rethrow;
+        }
+        lastError = e;
+      } catch (e) {
+        lastError = e;
       }
 
-      // 🔁 exponential backoff
+      // backoff
       if (attempt < _maxRetries) {
-        final delaySeconds = attempt * 2; // 2s, 4s, 6s
-        await Future.delayed(Duration(seconds: delaySeconds));
+        await Future.delayed(Duration(seconds: attempt * 2)); // 2s,4s,6s
       }
+    }
+
+    // 3) Fallback la cache dacă e eroare (DNS / cold start / etc.)
+    if (cacheFallbackOnError && cacheTtl != null) {
+      final stale = await LocalCache.getJsonStale(key);
+      if (stale != null) return stale;
     }
 
     throw lastError ??

@@ -1,6 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:async';
 
 import 'package:http/http.dart' as http;
 
@@ -28,6 +28,10 @@ class ApiClient {
   final http.Client _client;
   final String baseUrl;
 
+  // 🔥 CONFIG
+  static const _timeout = Duration(seconds: 12);
+  static const _maxRetries = 3;
+
   Uri _uri(String path, [Map<String, dynamic>? query]) {
     final q = <String, String>{};
 
@@ -35,7 +39,7 @@ class ApiClient {
       for (final e in query.entries) {
         final v = e.value;
         if (v == null) continue;
-        if (v is List) continue; // listele se tratează în service
+        if (v is List) continue;
         final s = v.toString().trim();
         if (s.isEmpty) continue;
         q[e.key] = s;
@@ -46,7 +50,7 @@ class ApiClient {
         .replace(queryParameters: q.isEmpty ? null : q);
   }
 
-  /// 🔥 GET cu timeout + retry (pentru Render cold start)
+  /// 🚀 GET cu retry + exponential backoff
   Future<dynamic> getJson(
     String path, {
     Map<String, dynamic>? query,
@@ -54,11 +58,11 @@ class ApiClient {
   }) async {
     final uri = _uri(path, query);
 
-    int attempts = 0;
-    const maxAttempts = 3;
+    int attempt = 0;
+    Object? lastError;
 
-    while (true) {
-      attempts++;
+    while (attempt < _maxRetries) {
+      attempt++;
 
       try {
         final res = await _client
@@ -69,44 +73,64 @@ class ApiClient {
                 if (headers != null) ...headers,
               },
             )
-            .timeout(const Duration(seconds: 25));
+            .timeout(_timeout);
 
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          String msg = 'HTTP ${res.statusCode}';
-          try {
-            final decoded = jsonDecode(res.body);
-            if (decoded is Map && decoded['detail'] != null) {
-              msg = decoded['detail'].toString();
-            } else {
-              msg = res.body.toString();
-            }
-          } catch (_) {
+        // ✅ HTTP OK
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          if (res.body.isEmpty) return null;
+          return jsonDecode(utf8.decode(res.bodyBytes));
+        }
+
+        // ❌ HTTP error
+        String msg = 'HTTP ${res.statusCode}';
+        try {
+          final decoded = jsonDecode(res.body);
+          if (decoded is Map && decoded['detail'] != null) {
+            msg = decoded['detail'].toString();
+          } else {
             msg = res.body.toString();
           }
-          throw ApiException(msg, statusCode: res.statusCode);
+        } catch (_) {
+          msg = res.body.toString();
         }
 
-        if (res.body.isEmpty) return null;
-        return jsonDecode(utf8.decode(res.bodyBytes));
-      } on SocketException catch (e) {
-        if (attempts >= maxAttempts) {
-          throw ApiException('No internet / DNS error: ${e.message}');
-        }
-        await Future.delayed(const Duration(seconds: 2));
-      } on TimeoutException {
-        if (attempts >= maxAttempts) {
-          throw ApiException('Request timeout');
-        }
-        await Future.delayed(const Duration(seconds: 2));
-      } on http.ClientException catch (e) {
-        if (attempts >= maxAttempts) {
-          throw ApiException('HTTP client error: ${e.message}');
-        }
-        await Future.delayed(const Duration(seconds: 2));
-      } on FormatException {
+        throw ApiException(msg, statusCode: res.statusCode);
+      }
+
+      // 🌐 DNS / network
+      on SocketException catch (e) {
+        lastError = ApiException(
+          'Network error (attempt $attempt/$_maxRetries): ${e.message}',
+        );
+      }
+
+      // ⏱️ timeout
+      on TimeoutException catch (_) {
+        lastError = ApiException(
+          'Server slow (attempt $attempt/$_maxRetries)',
+        );
+      }
+
+      // ❌ HTTP exception
+      on HttpException catch (e) {
+        lastError = ApiException('HTTP error: ${e.message}');
+        rethrow; // nu are sens retry
+      }
+
+      // ❌ JSON invalid
+      on FormatException {
         throw ApiException('Invalid JSON response');
       }
+
+      // 🔁 exponential backoff
+      if (attempt < _maxRetries) {
+        final delaySeconds = attempt * 2; // 2s, 4s, 6s
+        await Future.delayed(Duration(seconds: delaySeconds));
+      }
     }
+
+    throw lastError ??
+        ApiException('Request failed after $_maxRetries attempts');
   }
 
   void dispose() {

@@ -1,144 +1,330 @@
+// lib/services/sure_predict_service.dart
+import 'dart:convert';
+
 import '../api/api_client.dart';
-import '../cache/local_cache.dart';
-import '../models/fixture_item.dart';
-import '../models/league.dart';
-import '../models/prediction.dart';
 
+/// Service layer peste ApiClient.
+/// - normalizează parametrii
+/// - parsează răspunsuri
+/// - oferă metode clare pentru UI / store
 class SurePredictService {
-  SurePredictService(this._api, {LocalCache? cache}) : _cache = cache;
+  final ApiClient api;
 
-  final ApiClient _api;
-  LocalCache? _cache;
+  SurePredictService(this.api);
 
-  Future<void> initCache() async {
-    _cache ??= await LocalCache.create();
-  }
-
-  String _key(String path, Map<String, dynamic>? query) {
-    final q = (query ?? {}).entries.toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
-    final qs = q.map((e) => '${e.key}=${e.value}').join('&');
-    return 'sp::$path?$qs';
-  }
-
-  /// cacheFirst=true: dacă există cache valid, îl returnează imediat.
-  /// apoi poți face refresh din UI (force network).
-  Future<List<League>> getLeagues({bool? active, bool cacheFirst = true}) async {
-    await initCache();
-    final path = '/leagues';
-    final query = <String, dynamic>{
-      if (active != null) 'active': active.toString(),
-    };
-
-    final cacheKey = _key(path, query);
-    if (cacheFirst) {
-      final cached = _cache!.getJson(cacheKey, ttl: const Duration(hours: 24));
-      if (cached is List) {
-        return cached
-            .whereType<Map>()
-            .map((e) => League.fromJson(Map<String, dynamic>.from(e)))
-            .toList();
-      }
+  // --------------------------
+  // Health
+  // --------------------------
+  Future<HealthResponse> health() async {
+    final data = await api.getJson('/health');
+    // backend returnează: {"status":"ok"}
+    if (data is Map<String, dynamic>) {
+      return HealthResponse.fromJson(data);
     }
+    // fallback dacă backend-ul returnează string/alt format
+    return HealthResponse(status: 'unknown');
+  }
 
-    final data = await _api.getJson(path, query: query);
+  // --------------------------
+  // Leagues
+  // --------------------------
+  Future<List<League>> getLeagues() async {
+    final data = await api.getJson('/leagues');
     if (data is List) {
-      await _cache!.setJson(cacheKey, data);
       return data
           .whereType<Map>()
-          .map((e) => League.fromJson(Map<String, dynamic>.from(e)))
+          .map((m) => League.fromJson(Map<String, dynamic>.from(m)))
           .toList();
     }
-    return [];
+    return const [];
   }
 
-  /// Construiește query corect:
-  /// /fixtures?league_ids=a&league_ids=b&run_type=initial&limit=50&offset=0&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
-  String buildFixturesPath({
-    required List<String> leagueIds,
-    String runType = 'initial',
+  // --------------------------
+  // Fixtures list
+  // --------------------------
+  /// Important:
+  /// - backend-ul tău folosește `league_id` (UUID) pentru filtrare.
+  /// - `provider_league_id` (ex: "api_39") e doar informativ.
+  ///
+  /// from/to acceptă fie YYYY-MM-DD, fie ISO DateTime; aici trimitem YYYY-MM-DD.
+  Future<List<Fixture>> getFixtures({
+    required String leagueId, // UUID din backend (League.id)
+    required DateTime from,
+    required DateTime to,
     int limit = 50,
     int offset = 0,
-    String? status,
-    String? dateFrom,
-    String? dateTo,
-  }) {
-    final ids = leagueIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-    final parts = <String>[];
-
-    for (final id in ids) {
-      parts.add('league_ids=${Uri.encodeQueryComponent(id)}');
-    }
-
-    parts.add('run_type=${Uri.encodeQueryComponent(runType)}');
-    parts.add('limit=${Uri.encodeQueryComponent(limit.toString())}');
-    parts.add('offset=${Uri.encodeQueryComponent(offset.toString())}');
-
-    if (status != null && status.trim().isNotEmpty) {
-      parts.add('status=${Uri.encodeQueryComponent(status.trim())}');
-    }
-    if (dateFrom != null && dateFrom.trim().isNotEmpty) {
-      parts.add('date_from=${Uri.encodeQueryComponent(dateFrom.trim())}');
-    }
-    if (dateTo != null && dateTo.trim().isNotEmpty) {
-      parts.add('date_to=${Uri.encodeQueryComponent(dateTo.trim())}');
-    }
-
-    return '/fixtures?${parts.join('&')}';
-  }
-
-  Future<List<FixtureItem>> getFixturesByUrl(
-    String fullPathWithQuery, {
-    bool cacheFirst = true,
-    Duration ttl = const Duration(minutes: 10),
   }) async {
-    await initCache();
+    final query = <String, dynamic>{
+      'league_id': leagueId, // CHEIA CORECTĂ
+      'from': _ymd(from),
+      'to': _ymd(to),
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
 
-    final cacheKey = 'sp::$fullPathWithQuery';
-    if (cacheFirst) {
-      final cached = _cache!.getJson(cacheKey, ttl: ttl);
-      if (cached is List) {
-        return cached
-            .whereType<Map>()
-            .map((e) => FixtureItem.fromJson(Map<String, dynamic>.from(e)))
-            .toList();
-      }
-    }
+    final data = await api.getJson('/fixtures', query: query);
 
-    final data = await _api.getJson(fullPathWithQuery);
     if (data is List) {
-      await _cache!.setJson(cacheKey, data);
       return data
           .whereType<Map>()
-          .map((e) => FixtureItem.fromJson(Map<String, dynamic>.from(e)))
+          .map((m) => Fixture.fromJson(Map<String, dynamic>.from(m)))
           .toList();
     }
-    return [];
+    return const [];
   }
 
-  Future<Prediction?> getPrediction(
-    String providerFixtureId, {
-    String runType = 'initial',
-    bool cacheFirst = true,
+  /// Variantă “la liber” (dacă vrei să ceri fixtures fără league_id)
+  Future<List<Fixture>> getFixturesAny({
+    DateTime? from,
+    DateTime? to,
+    int limit = 50,
+    int offset = 0,
   }) async {
-    await initCache();
+    final query = <String, dynamic>{
+      if (from != null) 'from': _ymd(from),
+      if (to != null) 'to': _ymd(to),
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
 
-    final path = '/fixtures/$providerFixtureId/prediction';
-    final query = {'run_type': runType};
+    final data = await api.getJson('/fixtures', query: query);
 
-    final cacheKey = _key(path, query);
-    if (cacheFirst) {
-      final cached = _cache!.getJson(cacheKey, ttl: const Duration(hours: 2));
-      if (cached is Map) {
-        return Prediction.fromJson(Map<String, dynamic>.from(cached));
-      }
+    if (data is List) {
+      return data
+          .whereType<Map>()
+          .map((m) => Fixture.fromJson(Map<String, dynamic>.from(m)))
+          .toList();
     }
+    return const [];
+  }
 
-    final data = await _api.getJson(path, query: query);
+  // --------------------------
+  // Prediction
+  // --------------------------
+  /// Endpoint: /fixtures/{provider_fixture_id}/prediction
+  ///
+  /// providerFixtureId = ex: "123" (cum apare în JSON: provider_fixture_id)
+  Future<Prediction> getPrediction({
+    required String providerFixtureId,
+  }) async {
+    final data = await api.getJson('/fixtures/$providerFixtureId/prediction');
     if (data is Map) {
-      await _cache!.setJson(cacheKey, data);
       return Prediction.fromJson(Map<String, dynamic>.from(data));
     }
-    return null;
+    // dacă backend-ul returnează alt format (rare), încercăm să-l interpretăm
+    return const Prediction.empty();
   }
+
+  // --------------------------
+  // Helpers
+  // --------------------------
+  String _ymd(DateTime d) {
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$m-$day';
+  }
+}
+
+// ============================================================================
+// Models (simple, fără dependențe extra)
+// ============================================================================
+
+class HealthResponse {
+  final String status;
+  const HealthResponse({required this.status});
+
+  factory HealthResponse.fromJson(Map<String, dynamic> json) {
+    return HealthResponse(status: (json['status'] ?? '').toString());
+  }
+}
+
+class League {
+  final String id; // UUID din backend
+  final String providerLeagueId; // ex: "api_39"
+  final String name;
+  final String country;
+  final int tier;
+  final bool isActive;
+
+  const League({
+    required this.id,
+    required this.providerLeagueId,
+    required this.name,
+    required this.country,
+    required this.tier,
+    required this.isActive,
+  });
+
+  factory League.fromJson(Map<String, dynamic> json) {
+    return League(
+      id: (json['id'] ?? '').toString(),
+      providerLeagueId: (json['provider_league_id'] ?? '').toString(),
+      name: (json['name'] ?? '').toString(),
+      country: (json['country'] ?? '').toString(),
+      tier: _toInt(json['tier']),
+      isActive: _toBool(json['is_active']),
+    );
+  }
+}
+
+class Fixture {
+  final String id; // UUID din backend
+  final String providerFixtureId; // ex: "123"
+  final String leagueId; // UUID (League.id)
+  final DateTime kickoffAt;
+  final String status;
+
+  final String home;
+  final String away;
+
+  // Probabilități (pot lipsi)
+  final double? pHome;
+  final double? pDraw;
+  final double? pAway;
+  final double? pGG; // both teams to score
+  final double? pOver25;
+  final double? pUnder25;
+
+  // meta
+  final String? runType;
+  final DateTime? computedAt;
+
+  const Fixture({
+    required this.id,
+    required this.providerFixtureId,
+    required this.leagueId,
+    required this.kickoffAt,
+    required this.status,
+    required this.home,
+    required this.away,
+    this.pHome,
+    this.pDraw,
+    this.pAway,
+    this.pGG,
+    this.pOver25,
+    this.pUnder25,
+    this.runType,
+    this.computedAt,
+  });
+
+  factory Fixture.fromJson(Map<String, dynamic> json) {
+    return Fixture(
+      id: (json['id'] ?? '').toString(),
+      providerFixtureId: (json['provider_fixture_id'] ?? '').toString(),
+      leagueId: (json['league_id'] ?? '').toString(),
+      kickoffAt: _toDateTime(json['kickoff_at']) ?? DateTime.fromMillisecondsSinceEpoch(0),
+      status: (json['status'] ?? '').toString(),
+      home: (json['home'] ?? '').toString(),
+      away: (json['away'] ?? '').toString(),
+      runType: json['run_type']?.toString(),
+      computedAt: _toDateTime(json['computed_at']),
+      pHome: _toDoubleNullable(json['p_home']),
+      pDraw: _toDoubleNullable(json['p_draw']),
+      pAway: _toDoubleNullable(json['p_away']),
+      pGG: _toDoubleNullable(json['p_gg']),
+      pOver25: _toDoubleNullable(json['p_over25']),
+      pUnder25: _toDoubleNullable(json['p_under25']),
+    );
+  }
+}
+
+class Prediction {
+  final String providerFixtureId;
+  final double? pHome;
+  final double? pDraw;
+  final double? pAway;
+  final double? pGG;
+  final double? pOver25;
+  final double? pUnder25;
+
+  // opțional: orice extra vine din backend (păstrăm brut)
+  final Map<String, dynamic>? raw;
+
+  const Prediction({
+    required this.providerFixtureId,
+    this.pHome,
+    this.pDraw,
+    this.pAway,
+    this.pGG,
+    this.pOver25,
+    this.pUnder25,
+    this.raw,
+  });
+
+  const Prediction.empty()
+      : providerFixtureId = '',
+        pHome = null,
+        pDraw = null,
+        pAway = null,
+        pGG = null,
+        pOver25 = null,
+        pUnder25 = null,
+        raw = null;
+
+  factory Prediction.fromJson(Map<String, dynamic> json) {
+    // În funcție de implementarea ta, prediction poate veni:
+    // - direct ca map cu cheile de probabilități
+    // - sau wrapped într-un "prediction"
+    final Map<String, dynamic> data = _unwrapPrediction(json);
+
+    return Prediction(
+      providerFixtureId: (data['provider_fixture_id'] ?? data['providerFixtureId'] ?? '').toString(),
+      pHome: _toDoubleNullable(data['p_home']),
+      pDraw: _toDoubleNullable(data['p_draw']),
+      pAway: _toDoubleNullable(data['p_away']),
+      pGG: _toDoubleNullable(data['p_gg']),
+      pOver25: _toDoubleNullable(data['p_over25']),
+      pUnder25: _toDoubleNullable(data['p_under25']),
+      raw: json,
+    );
+  }
+}
+
+// ============================================================================
+// Parsing helpers
+// ============================================================================
+
+int _toInt(dynamic v) {
+  if (v == null) return 0;
+  if (v is int) return v;
+  return int.tryParse(v.toString()) ?? 0;
+}
+
+bool _toBool(dynamic v) {
+  if (v == null) return false;
+  if (v is bool) return v;
+  final s = v.toString().toLowerCase().trim();
+  return s == 'true' || s == '1' || s == 'yes';
+}
+
+double? _toDoubleNullable(dynamic v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  return double.tryParse(v.toString());
+}
+
+DateTime? _toDateTime(dynamic v) {
+  if (v == null) return null;
+  if (v is DateTime) return v;
+  final s = v.toString();
+  if (s.isEmpty) return null;
+  return DateTime.tryParse(s);
+}
+
+Map<String, dynamic> _unwrapPrediction(Map<String, dynamic> json) {
+  // dacă backend-ul returnează { "prediction": {...} }
+  final pred = json['prediction'];
+  if (pred is Map) return Map<String, dynamic>.from(pred);
+
+  // dacă backend-ul returnează string json
+  final raw = json['raw'];
+  if (raw is String) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+  }
+
+  return json;
 }

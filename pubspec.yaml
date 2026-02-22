@@ -9,12 +9,13 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+
   flutter_localizations:
     sdk: flutter
 
   intl: any
   http: ^1.2.2
-  shared_preferences: ^2.3.2
+  shared_preferences: ^2.2.3
 
 dev_dependencies:
   flutter_test:
@@ -23,6 +24,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
   assets:
     - lib/l10n/app_ro.arb
     - lib/l10n/app_en.arb

@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -16,19 +16,20 @@ jobs:
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
-          java-version: "17"
+          distribution: temurin
+          java-version: 17
 
-      # IMPORTANT: Fix pentru erorile tale (ffi/file/UnmodifiableUint8ListView)
-      - name: Setup Flutter
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.27.0"
-          channel: "stable"
-          cache: true
+          flutter-version: 3.27.0
 
       - name: Flutter doctor
         run: flutter doctor -v
+
+      # 🔥 IMPORTANT — scoate dependențele vechi din lock
+      - name: Pub upgrade (force new deps)
+        run: flutter pub upgrade --major-versions
 
       - name: Pub get
         run: flutter pub get
@@ -39,5 +40,5 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apk
+          name: app-release
           path: build/app/outputs/flutter-apk/app-release.apk

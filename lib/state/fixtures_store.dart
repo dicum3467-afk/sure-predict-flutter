@@ -6,28 +6,32 @@ class FixturesStore extends ChangeNotifier {
 
   FixturesStore(this._service);
 
-  // ====== STATE EXPUS UI ======
+  // ====== STATE ======
   bool isLoading = false;
   bool isLoadingMore = false;
 
   String? error;
 
-  // UI-ul tău cere store.fixtures
-  final List<Map<String, dynamic>> fixtures = [];
+  // Lista internă
+  final List<Map<String, dynamic>> _fixtures = [];
+
+  // UI-ul tău folosește store.items (și uneori store.fixtures).
+  List<Map<String, dynamic>> get items => List.unmodifiable(_fixtures);
+  List<Map<String, dynamic>> get fixtures => List.unmodifiable(_fixtures);
 
   // paging
   int limit = 50;
   int offset = 0;
   bool hasMore = true;
 
-  // filter/params
+  // param
   String? _leagueId;
 
   Future<void> loadInitial(String leagueId) async {
     _leagueId = leagueId;
     offset = 0;
     hasMore = true;
-    fixtures.clear();
+    _fixtures.clear();
     error = null;
 
     isLoading = true;
@@ -40,12 +44,12 @@ class FixturesStore extends ChangeNotifier {
         offset: offset,
       );
 
-      fixtures
+      _fixtures
         ..clear()
         ..addAll(data);
 
       hasMore = data.length >= limit;
-      offset = fixtures.length;
+      offset = _fixtures.length;
     } catch (e) {
       error = e.toString();
     } finally {
@@ -78,9 +82,9 @@ class FixturesStore extends ChangeNotifier {
         offset: offset,
       );
 
-      fixtures.addAll(data);
+      _fixtures.addAll(data);
       hasMore = data.length >= limit;
-      offset = fixtures.length;
+      offset = _fixtures.length;
     } catch (e) {
       error = e.toString();
     } finally {

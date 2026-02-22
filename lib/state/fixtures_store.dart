@@ -10,29 +10,33 @@ class FixturesStore extends ChangeNotifier {
 
   bool loading = false;
   String? error;
-  List<FixtureItem> fixtures = <FixtureItem>[];
+  List<FixtureItem> fixtures = [];
 
+  // paginare
   int limit = 50;
   int offset = 0;
+
+  // run type (initial / daily etc)
   String runType = 'initial';
 
   // filtre opționale
-  String? status;
-  String? dateFrom; // ex: "2026-02-19"
-  String? dateTo;   // ex: "2026-02-25"
+  String? status;   // ex: "scheduled", "live", "finished"
+  String? dateFrom; // "YYYY-MM-DD"
+  String? dateTo;   // "YYYY-MM-DD"
 
-  Future<void> loadForLeague(String leagueUid) async {
-    await loadForLeagues(<String>[leagueUid]);
+  Future<void> loadForLeague(String leagueId) async {
+    await loadForLeagues([leagueId]);
   }
 
-  Future<void> loadForLeagues(List<String> leagueUids) async {
+  Future<void> loadForLeagues(List<String> leagueIds) async {
     loading = true;
     error = null;
     notifyListeners();
 
     try {
+      // construim URL-ul complet cu league_ids repetat + restul query-ului
       final path = _service.buildFixturesPath(
-        leagueUids: leagueUids,
+        leagueIds: leagueIds,
         runType: runType,
         limit: limit,
         offset: offset,
@@ -42,15 +46,21 @@ class FixturesStore extends ChangeNotifier {
       );
 
       fixtures = await _service.getFixturesByUrl(path);
+
+      // ✅ sortare (cele mai apropiate primele)
+      fixtures.sort((a, b) =>
+          (a.kickoffAt ?? DateTime(2100))
+              .compareTo(b.kickoffAt ?? DateTime(2100)));
     } catch (e) {
       error = e.toString();
-      fixtures = <FixtureItem>[];
+      fixtures = [];
     } finally {
       loading = false;
       notifyListeners();
     }
   }
 
+  // Helpers pentru UI (optional)
   void setPaging({int? newLimit, int? newOffset}) {
     if (newLimit != null) limit = newLimit;
     if (newOffset != null) offset = newOffset;
@@ -74,7 +84,7 @@ class FixturesStore extends ChangeNotifier {
   }
 
   void reset() {
-    fixtures = <FixtureItem>[];
+    fixtures = [];
     error = null;
     loading = false;
 

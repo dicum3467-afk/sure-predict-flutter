@@ -10,31 +10,29 @@ class FixturesStore extends ChangeNotifier {
 
   bool loading = false;
   String? error;
-  List<FixtureItem> fixtures = [];
+  List<FixtureItem> fixtures = <FixtureItem>[];
 
   int limit = 50;
   int offset = 0;
   String runType = 'initial';
 
-  // filtre opționale (le poți seta din UI dacă vrei)
+  // filtre opționale
   String? status;
-  String? dateFrom; // "2026-02-19"
-  String? dateTo; // "2026-02-25"
+  String? dateFrom; // ex: "2026-02-19"
+  String? dateTo;   // ex: "2026-02-25"
 
-  Future<void> loadForLeague(String leagueId) async {
-    await loadForLeagues([leagueId]);
+  Future<void> loadForLeague(String leagueUid) async {
+    await loadForLeagues(<String>[leagueUid]);
   }
 
-  Future<void> loadForLeagues(List<String> leagueIds) async {
+  Future<void> loadForLeagues(List<String> leagueUids) async {
     loading = true;
     error = null;
     notifyListeners();
 
     try {
-      // Construiește path-ul cu league_ids repetat:
-      // /fixtures?league_ids=a&league_ids=b&run_type=...&limit=...&offset=...
       final path = _service.buildFixturesPath(
-        leagueIds: leagueIds,
+        leagueUids: leagueUids,
         runType: runType,
         limit: limit,
         offset: offset,
@@ -46,7 +44,7 @@ class FixturesStore extends ChangeNotifier {
       fixtures = await _service.getFixturesByUrl(path);
     } catch (e) {
       error = e.toString();
-      fixtures = [];
+      fixtures = <FixtureItem>[];
     } finally {
       loading = false;
       notifyListeners();
@@ -56,6 +54,11 @@ class FixturesStore extends ChangeNotifier {
   void setPaging({int? newLimit, int? newOffset}) {
     if (newLimit != null) limit = newLimit;
     if (newOffset != null) offset = newOffset;
+    notifyListeners();
+  }
+
+  void setRunType(String value) {
+    runType = value;
     notifyListeners();
   }
 
@@ -70,21 +73,19 @@ class FixturesStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setRunType(String value) {
-    runType = value;
-    notifyListeners();
-  }
-
   void reset() {
-    fixtures = [];
+    fixtures = <FixtureItem>[];
     error = null;
     loading = false;
+
     limit = 50;
     offset = 0;
     runType = 'initial';
+
     status = null;
     dateFrom = null;
     dateTo = null;
+
     notifyListeners();
   }
 }

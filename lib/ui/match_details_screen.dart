@@ -10,7 +10,7 @@ class MatchDetailsScreen extends StatelessWidget {
 
   String _formatDate(DateTime? dt) {
     if (dt == null) return '-';
-    return DateFormat('EEE, dd MMM yyyy • HH:mm').format(dt.toLocal());
+    return DateFormat('EEE, dd MMM yyyy · HH:mm').format(dt.toLocal());
   }
 
   String _pct(double? v) {
@@ -88,7 +88,7 @@ class MatchDetailsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            '${_formatDate(fixture.kickoffAt)} • ${fixture.status} • run: ${fixture.runType ?? "-"}',
+            '${_formatDate(fixture.kickoffAt)} · ${fixture.status} · run: ${fixture.runType ?? "-"}',
             style: const TextStyle(fontSize: 14),
           ),
 
@@ -122,7 +122,7 @@ class MatchDetailsScreen extends StatelessWidget {
             children: [
               _probTile(
                 label: 'BTTS',
-                value: fixture.pgg,
+                value: fixture.pGg, // ✅ FIX AICI
                 highlight: false,
               ),
               _probTile(

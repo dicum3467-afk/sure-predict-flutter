@@ -9,47 +9,49 @@ class BannerAdWidget extends StatefulWidget {
 }
 
 class _BannerAdWidgetState extends State<BannerAdWidget> {
-  BannerAd? _banner;
+  BannerAd? _ad;
   bool _loaded = false;
 
-  static const String _adUnitId =
-      'ca-app-pub-2800443504046517/6111381965';
+  static const String _bannerId = 'ca-app-pub-2800443504046517/6111381965';
 
   @override
   void initState() {
     super.initState();
 
-    _banner = BannerAd(
+    _ad = BannerAd(
+      adUnitId: _bannerId,
       size: AdSize.banner,
-      adUnitId: _adUnitId,
+      request: const AdRequest(),
       listener: BannerAdListener(
         onAdLoaded: (_) {
-          setState(() => _loaded = true);
+          if (mounted) setState(() => _loaded = true);
         },
         onAdFailedToLoad: (ad, error) {
           ad.dispose();
+          // optional debug:
+          // debugPrint('Ad failed: $error');
         },
       ),
-      request: const AdRequest(),
     )..load();
   }
 
   @override
   void dispose() {
-    _banner?.dispose();
+    _ad?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_loaded || _banner == null) {
-      return const SizedBox.shrink();
+    // păstrăm spațiu constant ca să nu sară UI
+    if (!_loaded || _ad == null) {
+      return const SizedBox(height: 50);
     }
 
     return SizedBox(
-      height: _banner!.size.height.toDouble(),
-      width: _banner!.size.width.toDouble(),
-      child: AdWidget(ad: _banner!),
+      height: _ad!.size.height.toDouble(),
+      width: _ad!.size.width.toDouble(),
+      child: AdWidget(ad: _ad!),
     );
   }
 }

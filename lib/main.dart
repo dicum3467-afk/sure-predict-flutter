@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import 'api/api_client.dart';
 import 'services/sure_predict_service.dart';
@@ -6,8 +7,13 @@ import 'state/leagues_store.dart';
 import 'state/fixtures_store.dart';
 import 'state/favorites_store.dart';
 import 'ui/home_shell.dart';
+import 'ads/ad_service.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await AdService.init(); // 🔥 IMPORTANT
+
   runApp(const SurePredictApp());
 }
 

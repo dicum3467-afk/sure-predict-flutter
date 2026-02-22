@@ -8,28 +8,27 @@ class FixturesStore extends ChangeNotifier {
 
   final SurePredictService _service;
 
-  // state
   bool loading = false;
   String? error;
-  List<FixtureItem> fixtures = [];
+
+  final List<FixtureItem> fixtures = [];
 
   // paging
   int limit = 50;
   int offset = 0;
-  bool hasMore = true;
 
-  // query / filters
-  String runType = 'initial'; // initial / live / etc.
+  // filtrare
+  String runType = 'initial';
   String? status;
   String? dateFrom; // YYYY-MM-DD
   String? dateTo;   // YYYY-MM-DD
 
-  // last request context
-  List<String> _lastLeagueIds = [];
+  // intern: ultimul batch pentru hasMore
+  int _lastBatchCount = 0;
 
-  // -------------------------
-  // Date range helper
-  // -------------------------
+  bool get hasMore => _lastBatchCount >= limit;
+
+  // set default range: azi -> azi + days
   void setDefaultDateRange({int days = 7}) {
     final now = DateTime.now();
     final from = DateTime(now.year, now.month, now.day);
@@ -45,35 +44,49 @@ class FixturesStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  // -------------------------
-  // Main loads
-  // -------------------------
-  Future<void> loadForLeague(
-    String leagueId, {
+  Future<void> loadForLeague(String leagueId, {bool cacheFirst = false}) async {
+    await loadForLeagues([leagueId], cacheFirst: cacheFirst);
+  }
+
+  Future<void> refresh({required String leagueId, bool cacheFirst = false}) async {
+    // reset paging, păstrăm filtrele
+    offset = 0;
+    fixtures.clear();
+    _lastBatchCount = 0;
+    notifyListeners();
+
+    await loadForLeague(leagueId, cacheFirst: cacheFirst);
+  }
+
+  Future<void> loadMore({
+    required String leagueId,
     bool cacheFirst = false,
   }) async {
-    await loadForLeagues([leagueId], cacheFirst: cacheFirst, append: false);
+    if (loading) return;
+    if (!hasMore && fixtures.isNotEmpty) return;
+
+    offset += limit;
+    notifyListeners();
+
+    await loadForLeague(leagueId, cacheFirst: cacheFirst);
   }
 
   Future<void> loadForLeagues(
-    List<String> leagueIds, {
+    List<String> leagueUuids, {
     bool cacheFirst = false,
-    bool append = false,
   }) async {
-    _lastLeagueIds = leagueIds;
-
     loading = true;
     error = null;
     notifyListeners();
 
     try {
-      // retry (Render cold start / net glitch)
+      // retry pentru cold start / rețea instabilă
       const maxAttempts = 3;
 
       for (int attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           final path = _service.buildFixturesPath(
-            leagueIds: leagueIds,
+            leagueIds: leagueUuids,
             runType: runType,
             limit: limit,
             offset: offset,
@@ -82,16 +95,18 @@ class FixturesStore extends ChangeNotifier {
             dateTo: dateTo,
           );
 
-          final data = await _service.getFixturesByUrl(path);
+          final batch = await _service.getFixturesByUrl(path);
 
-          if (append) {
-            fixtures.addAll(data);
+          _lastBatchCount = batch.length;
+
+          if (offset == 0) {
+            fixtures
+              ..clear()
+              ..addAll(batch);
           } else {
-            fixtures = data;
+            fixtures.addAll(batch);
           }
 
-          // dacă a venit fix cât limit, posibil mai există pagini
-          hasMore = data.length == limit;
           error = null;
           break;
         } catch (e) {
@@ -101,45 +116,16 @@ class FixturesStore extends ChangeNotifier {
       }
     } catch (e) {
       error = e.toString();
-      if (!append) fixtures = [];
-      hasMore = false;
+      if (offset == 0) {
+        fixtures.clear();
+      }
+      _lastBatchCount = 0;
     } finally {
       loading = false;
       notifyListeners();
     }
   }
 
-  // -------------------------
-  // UI actions
-  // -------------------------
-  Future<void> refresh() async {
-    // refresh = reîncarcă de la offset 0
-    offset = 0;
-    hasMore = true;
-
-    if (_lastLeagueIds.isEmpty) {
-      // fallback safe
-      fixtures = [];
-      error = null;
-      loading = false;
-      notifyListeners();
-      return;
-    }
-
-    await loadForLeagues(_lastLeagueIds, cacheFirst: false, append: false);
-  }
-
-  Future<void> loadMore({bool cacheFirst = false}) async {
-    if (loading || !hasMore) return;
-    if (_lastLeagueIds.isEmpty) return;
-
-    offset += limit;
-    await loadForLeagues(_lastLeagueIds, cacheFirst: cacheFirst, append: true);
-  }
-
-  // -------------------------
-  // Setters
-  // -------------------------
   void setPaging({int? newLimit, int? newOffset}) {
     if (newLimit != null) limit = newLimit;
     if (newOffset != null) offset = newOffset;
@@ -163,20 +149,20 @@ class FixturesStore extends ChangeNotifier {
   }
 
   void reset() {
-    fixtures = [];
+    fixtures.clear();
     error = null;
     loading = false;
 
     limit = 50;
     offset = 0;
-    hasMore = true;
-
     runType = 'initial';
+
     status = null;
     dateFrom = null;
     dateTo = null;
 
-    _lastLeagueIds = [];
+    _lastBatchCount = 0;
+
     notifyListeners();
   }
 }

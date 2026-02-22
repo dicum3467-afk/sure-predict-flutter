@@ -5,13 +5,13 @@ class AdService {
     await MobileAds.instance.initialize();
   }
 
-  // 🔥 TEST BANNER ID (NU SCHIMBA încă)
-  static const String bannerTestId =
-      'ca-app-pub-3940256099942544/6300978111';
+  // 🔥 ÎNLOCUIEȘTE CU ID-UL TĂU REAL
+  static const String bannerId =
+      'ca-app-pub-3940256099942544/6300978111'; // <-- schimbăm după
 
   static BannerAd createBanner() {
     return BannerAd(
-      adUnitId: bannerTestId,
+      adUnitId: bannerId,
       size: AdSize.banner,
       request: const AdRequest(),
       listener: BannerAdListener(),

@@ -18,11 +18,12 @@ class League {
   factory League.fromJson(Map<String, dynamic> json) {
     return League(
       id: (json['id'] ?? '').toString(),
+      // CHEIA CORECTĂ din backend:
       providerLeagueId: json['provider_league_id']?.toString(),
       name: (json['name'] ?? '').toString(),
       country: json['country']?.toString(),
-      tier: json['tier'] is int ? json['tier'] as int : int.tryParse(json['tier']?.toString() ?? ''),
-      isActive: json['is_active'] == true,
+      tier: json['tier'] is int ? json['tier'] as int : int.tryParse('${json['tier']}'),
+      isActive: json['is_active'] == true || json['is_active']?.toString() == 'true',
     );
   }
 }

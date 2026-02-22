@@ -13,20 +13,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: "17"
 
+      # IMPORTANT: Fix pentru erorile tale (ffi/file/UnmodifiableUint8ListView)
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.24.5"
+          flutter-version: "3.27.0"
           channel: "stable"
           cache: true
 
-      - name: Flutter Pub Get
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Pub get
         run: flutter pub get
 
       - name: Build APK (release)

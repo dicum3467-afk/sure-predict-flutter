@@ -1,143 +1,128 @@
+// lib/ui/fixtures_screen.dart
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import '../api/api_client.dart';
-import '../models/fixture_item.dart';
-import '../models/league.dart';
 import '../services/sure_predict_service.dart';
-import '../state/fixtures_store.dart';
-import 'match_details_screen.dart';
 
 class FixturesScreen extends StatefulWidget {
-  const FixturesScreen({super.key, required this.league});
-
   final League league;
+  final SurePredictService service;
+
+  const FixturesScreen({
+    super.key,
+    required this.league,
+    required this.service,
+  });
 
   @override
   State<FixturesScreen> createState() => _FixturesScreenState();
 }
 
 class _FixturesScreenState extends State<FixturesScreen> {
-  late final FixturesStore store;
+  bool loading = false;
+  String? error;
+
+  List<Fixture> fixtures = const [];
+
+  int limit = 50;
+  int offset = 0;
+
+  // range default 30 zile (cum arătai în screenshot)
+  late DateTime from;
+  late DateTime to;
 
   @override
   void initState() {
     super.initState();
+    final now = DateTime.now();
+    from = DateTime(now.year, now.month, now.day);
+    to = from.add(const Duration(days: 30));
 
-    final api = ApiClient();
-    final service = SurePredictService(api);
-    store = FixturesStore(service);
-
-    // range mai mare => ligi ca Ligue 1 vor avea meciuri
-    store.setDefaultDateRange(days: 30);
-
-    // primul load
-    store.loadForLeague(widget.league.id, cacheFirst: true);
+    _load();
   }
 
-  @override
-  void dispose() {
-    store.dispose();
-    super.dispose();
+  Future<void> _load() async {
+    setState(() {
+      loading = true;
+      error = null;
+    });
+
+    try {
+      final data = await widget.service.getFixtures(
+        leagueId: widget.league.id, // IMPORTANT: UUID
+        from: from,
+        to: to,
+        limit: limit,
+        offset: offset,
+      );
+
+      setState(() {
+        fixtures = data;
+      });
+    } on ApiException catch (e) {
+      setState(() => error = e.toString());
+    } catch (e) {
+      setState(() => error = e.toString());
+    } finally {
+      setState(() => loading = false);
+    }
   }
 
-  String _formatDate(DateTime? dt) {
-    if (dt == null) return '-';
-    return DateFormat('EEE, dd MMM yyyy • HH:mm').format(dt.toLocal());
-  }
-
-  String _pct(double? v) {
-    if (v == null) return '--';
-    return '${(v * 100).toStringAsFixed(0)}%';
+  Future<void> _try60Days() async {
+    setState(() {
+      to = from.add(const Duration(days: 60));
+      offset = 0;
+    });
+    await _load();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: store,
-      builder: (_, __) {
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(widget.league.name),
-            actions: [
-              IconButton(
-                tooltip: 'Refresh (network)',
-                onPressed: store.loading
-                    ? null
-                    : () => store.refresh([widget.league.id], cacheFirst: false),
-                icon: const Icon(Icons.refresh),
-              ),
-            ],
+    final title = widget.league.name;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: loading ? null : _load,
           ),
-          body: _body(),
-        );
-      },
+        ],
+      ),
+      body: _body(context),
     );
   }
 
-  Widget _body() {
-    // loading + gol => spinner
-    if (store.loading && store.fixtures.isEmpty) {
+  Widget _body(BuildContext context) {
+    final rangeText = 'Range: ${_ymd(from)} → ${_ymd(to)}\nlimit=$limit offset=$offset';
+
+    if (loading && fixtures.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    // eroare + gol => ecran eroare
-    if (store.error != null && store.fixtures.isEmpty) {
+    if (fixtures.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                'Error:\n${store.error}',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              ElevatedButton.icon(
-                onPressed: () =>
-                    store.loadForLeague(widget.league.id, cacheFirst: true),
-                icon: const Icon(Icons.refresh),
-                label: const Text('Retry'),
-              ),
+              const Text('No fixtures', style: TextStyle(fontSize: 18)),
               const SizedBox(height: 8),
-              OutlinedButton(
-                onPressed: () => store.refresh([widget.league.id]),
-                child: const Text('Force network refresh'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // gol fara eroare => "No fixtures"
-    if (store.fixtures.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('No fixtures'),
-              const SizedBox(height: 8),
-              Text(
-                'Range: ${store.dateFrom ?? "-"} → ${store.dateTo ?? "-"}\n'
-                'limit=${store.limit} offset=${store.offset}',
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12),
-              ),
-              const SizedBox(height: 12),
+              Text(rangeText, textAlign: TextAlign.center),
+              const SizedBox(height: 14),
+              if (error != null) ...[
+                Text('Error:\n$error', textAlign: TextAlign.center),
+                const SizedBox(height: 14),
+              ],
               ElevatedButton(
-                onPressed: () => store.refresh([widget.league.id]),
+                onPressed: loading ? null : _load,
                 child: const Text('Refresh'),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               OutlinedButton(
-                onPressed: () {
-                  store.setDefaultDateRange(days: 60);
-                  store.refresh([widget.league.id]);
-                },
+                onPressed: loading ? null : _try60Days,
                 child: const Text('Try 60 days range'),
               ),
             ],
@@ -146,36 +131,33 @@ class _FixturesScreenState extends State<FixturesScreen> {
       );
     }
 
-    // listă cu footer pentru load more
     return RefreshIndicator(
-      onRefresh: () => store.refresh([widget.league.id], cacheFirst: false),
+      onRefresh: _load,
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: store.fixtures.length + 1, // + footer
+        itemCount: fixtures.length + 1,
         separatorBuilder: (_, __) => const Divider(height: 1),
-        itemBuilder: (context, index) {
-          if (index == store.fixtures.length) {
-            return _footer();
+        itemBuilder: (context, i) {
+          if (i == 0) {
+            return Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                rangeText,
+                style: Theme.of(context).textTheme.bodySmall,
+                textAlign: TextAlign.center,
+              ),
+            );
           }
 
-          final f = store.fixtures[index];
-          final when = _formatDate(f.kickoffAt);
+          final f = fixtures[i - 1];
 
           return ListTile(
             title: Text('${f.home} vs ${f.away}'),
-            subtitle: Text('$when • ${f.status} • run: ${f.runType ?? "-"}'),
-            trailing: _ProbsChip(
-              pHome: f.pHome,
-              pDraw: f.pDraw,
-              pAway: f.pAway,
-              fmt: _pct,
-            ),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => MatchDetailsScreen(fixture: f),
-                ),
-              );
+            subtitle: Text('${_formatKickoff(f.kickoffAt)} • ${f.status}'),
+            trailing: _ProbsChip(f),
+            onTap: () async {
+              // opțional: la tap, ia predicția detaliată
+              await _openPrediction(context, f);
             },
           );
         },
@@ -183,94 +165,100 @@ class _FixturesScreenState extends State<FixturesScreen> {
     );
   }
 
-  Widget _footer() {
-    final err = store.error;
+  Future<void> _openPrediction(BuildContext context, Fixture f) async {
+    try {
+      final pred = await widget.service.getPrediction(
+        providerFixtureId: f.providerFixtureId,
+      );
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Column(
-        children: [
-          Text(
-            'Range: ${store.dateFrom ?? "-"} → ${store.dateTo ?? "-"} • '
-            'limit=${store.limit} offset=${store.offset}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 12),
-          ),
-          if (err != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              err,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12),
-            ),
-          ],
-          const SizedBox(height: 10),
-          Row(
+      if (!mounted) return;
+
+      showModalBottomSheet(
+        context: context,
+        showDragHandle: true,
+        builder: (_) => Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: store.loading
-                      ? null
-                      : () {
-                          store.setDefaultDateRange(days: 30);
-                          store.refresh([widget.league.id]);
-                        },
-                  icon: const Icon(Icons.date_range),
-                  label: const Text('30 days'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: (store.loading || !store.hasMore)
-                      ? null
-                      : () => store.loadMore([widget.league.id], cacheFirst: false),
-                  icon: store.loading
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.expand_more),
-                  label: Text(store.hasMore ? 'Load more' : 'No more'),
-                ),
-              ),
+              Text('${f.home} vs ${f.away}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Text('provider_fixture_id: ${f.providerFixtureId}'),
+              const SizedBox(height: 12),
+              _kv('Home', pred.pHome),
+              _kv('Draw', pred.pDraw),
+              _kv('Away', pred.pAway),
+              _kv('GG', pred.pGG),
+              _kv('Over 2.5', pred.pOver25),
+              _kv('Under 2.5', pred.pUnder25),
             ],
           ),
-          const SizedBox(height: 6),
-          const Text(
-            'Pull down to refresh (network)',
-            style: TextStyle(fontSize: 11),
-          ),
-        ],
-      ),
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    }
+  }
+
+  Widget _kv(String label, double? v) {
+    final text = v == null ? '-' : (v * 100).toStringAsFixed(1) + '%';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Text('$label: $text'),
     );
+  }
+
+  String _ymd(DateTime d) {
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$m-$day';
+  }
+
+  String _formatKickoff(DateTime d) {
+    final ymd = _ymd(d);
+    final hh = d.hour.toString().padLeft(2, '0');
+    final mm = d.minute.toString().padLeft(2, '0');
+    return '$ymd $hh:$mm';
   }
 }
 
 class _ProbsChip extends StatelessWidget {
-  const _ProbsChip({
-    required this.pHome,
-    required this.pDraw,
-    required this.pAway,
-    required this.fmt,
-  });
-
-  final double? pHome;
-  final double? pDraw;
-  final double? pAway;
-  final String Function(double? v) fmt;
+  final Fixture f;
+  const _ProbsChip(this.f);
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Text('H ${fmt(pHome)}', style: const TextStyle(fontSize: 12)),
-        Text('D ${fmt(pDraw)}', style: const TextStyle(fontSize: 12)),
-        Text('A ${fmt(pAway)}', style: const TextStyle(fontSize: 12)),
-      ],
+    // dacă ai probabilități pe fixture, arătăm un rezumat.
+    final parts = <String>[];
+
+    if (f.pHome != null && f.pAway != null && f.pDraw != null) {
+      parts.add('1:${(f.pHome! * 100).toStringAsFixed(0)}');
+      parts.add('X:${(f.pDraw! * 100).toStringAsFixed(0)}');
+      parts.add('2:${(f.pAway! * 100).toStringAsFixed(0)}');
+    } else if (f.pHome != null && f.pAway != null) {
+      parts.add('H:${(f.pHome! * 100).toStringAsFixed(0)}');
+      parts.add('A:${(f.pAway! * 100).toStringAsFixed(0)}');
+    }
+
+    if (parts.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.6),
+      ),
+      child: Text(parts.join(' '), style: Theme.of(context).textTheme.bodySmall),
     );
   }
 }

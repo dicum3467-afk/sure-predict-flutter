@@ -1,8 +1,11 @@
 plugins {
     id "com.android.application"
-    id "org.jetbrains.kotlin.android"
+    id "kotlin-android"
     id "dev.flutter.flutter-gradle-plugin"
 }
+
+def appVersionCode = 1
+def appVersionName = "1.0.0"
 
 android {
     namespace "com.example.sure_predict"
@@ -12,8 +15,18 @@ android {
         applicationId "com.example.sure_predict"
         minSdk 21
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCode
+        versionName appVersionName
+    }
+
+    // ✅ FIX IMPORTANT JVM
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
     }
 
     buildTypes {

@@ -1,1 +1,0 @@
-package mk.webfactory.flutter_template.platform_comm

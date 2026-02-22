@@ -12,31 +12,45 @@ class FixturesStore extends ChangeNotifier {
   String? error;
   List<FixtureItem> fixtures = [];
 
-  // paginare
+  // paging / query
   int limit = 50;
   int offset = 0;
-
-  // run type (initial / daily etc)
   String runType = 'initial';
 
   // filtre opționale
-  String? status;   // ex: "scheduled", "live", "finished"
+  String? status;
   String? dateFrom; // "YYYY-MM-DD"
-  String? dateTo;   // "YYYY-MM-DD"
+  String? dateTo; // "YYYY-MM-DD"
 
-  Future<void> loadForLeague(String leagueId) async {
-    await loadForLeagues([leagueId]);
+  /// Setează implicit intervalul: azi -> +7 zile
+  void setDefaultDates({int days = 7}) {
+    final now = DateTime.now();
+    final from = DateTime(now.year, now.month, now.day);
+    final to = from.add(Duration(days: days));
+
+    String fmt(DateTime d) =>
+        '${d.year.toString().padLeft(4, '0')}-'
+        '${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
+
+    dateFrom = fmt(from);
+    dateTo = fmt(to);
+    notifyListeners();
   }
 
-  Future<void> loadForLeagues(List<String> leagueIds) async {
+  Future<void> loadForLeague(String leagueUid) async {
+    await loadForLeagues([leagueUid]);
+  }
+
+  /// Load fixtures pentru una sau mai multe ligi
+  Future<void> loadForLeagues(List<String> leagueUids) async {
     loading = true;
     error = null;
     notifyListeners();
 
-    try {
-      // construim URL-ul complet cu league_ids repetat + restul query-ului
+    Future<List<FixtureItem>> _doRequest() async {
       final path = _service.buildFixturesPath(
-        leagueIds: leagueIds,
+        leagueUids: leagueUids,
         runType: runType,
         limit: limit,
         offset: offset,
@@ -44,13 +58,22 @@ class FixturesStore extends ChangeNotifier {
         dateFrom: dateFrom,
         dateTo: dateTo,
       );
+      return _service.getFixturesByUrl(path);
+    }
 
-      fixtures = await _service.getFixturesByUrl(path);
-
-      // ✅ sortare (cele mai apropiate primele)
-      fixtures.sort((a, b) =>
-          (a.kickoffAt ?? DateTime(2100))
-              .compareTo(b.kickoffAt ?? DateTime(2100)));
+    try {
+      // Retry simplu (Render cold start / DNS / connection abort)
+      const attempts = 3;
+      for (int i = 0; i < attempts; i++) {
+        try {
+          fixtures = await _doRequest();
+          error = null;
+          break;
+        } catch (e) {
+          if (i == attempts - 1) rethrow;
+          await Future.delayed(Duration(seconds: 2 + i)); // 2s, 3s
+        }
+      }
     } catch (e) {
       error = e.toString();
       fixtures = [];
@@ -60,18 +83,14 @@ class FixturesStore extends ChangeNotifier {
     }
   }
 
-  // Helpers pentru UI (optional)
+  /// Modifică paging-ul (ex: limit/offset) și, dacă vrei, poți reîncărca din UI.
   void setPaging({int? newLimit, int? newOffset}) {
     if (newLimit != null) limit = newLimit;
     if (newOffset != null) offset = newOffset;
     notifyListeners();
   }
 
-  void setRunType(String value) {
-    runType = value;
-    notifyListeners();
-  }
-
+  /// Setează filtrele și (opțional) reîncarci din UI după.
   void setFilters({
     String? newStatus,
     String? newDateFrom,
@@ -80,6 +99,11 @@ class FixturesStore extends ChangeNotifier {
     status = newStatus;
     dateFrom = newDateFrom;
     dateTo = newDateTo;
+    notifyListeners();
+  }
+
+  void setRunType(String value) {
+    runType = value;
     notifyListeners();
   }
 

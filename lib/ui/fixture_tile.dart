@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+
 import '../state/favorites_store.dart';
 import 'fixture_ui.dart';
+import 'live_badge.dart';
 
 class FixtureTile extends StatelessWidget {
   final String home;
@@ -24,9 +26,13 @@ class FixtureTile extends StatelessWidget {
     this.onTap,
   });
 
+  bool get _isLive {
+    final s = status.toLowerCase();
+    return s == 'live' || s == 'inplay' || s == 'in_play';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final st = statusStyle(status);
     final best = prediction == null ? null : bestBetFromMap(prediction!);
     final isFav = favorites.isFavorite(fixtureId);
 
@@ -60,24 +66,7 @@ class FixtureTile extends StatelessWidget {
                       const SizedBox(height: 6),
                       Row(
                         children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: st.bg,
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              st.text,
-                              style: TextStyle(
-                                color: st.fg,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
+                          LiveBadge(isLive: _isLive),
                           const SizedBox(width: 10),
                           Text(
                             formatKickoff(kickoff),
@@ -89,7 +78,7 @@ class FixtureTile extends StatelessWidget {
                   ),
                 ),
 
-                // ⭐ FAVORITE STAR
+                // ⭐ FAVORITE
                 IconButton(
                   icon: Icon(
                     isFav ? Icons.star : Icons.star_border,

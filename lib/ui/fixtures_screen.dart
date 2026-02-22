@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../api/api_client.dart';
@@ -20,10 +21,16 @@ class _FixturesScreenState extends State<FixturesScreen> {
   @override
   void initState() {
     super.initState();
-    final api = ApiClient(); // simplu; în producție îl injectezi singleton
+    final api = ApiClient();
     final service = SurePredictService(api);
     store = FixturesStore(service);
     store.loadForLeague(widget.league.id);
+  }
+
+  // ✅ FORMATARE DATĂ
+  String _formatDate(DateTime? dt) {
+    if (dt == null) return '-';
+    return DateFormat('dd MMM yyyy • HH:mm').format(dt.toLocal());
   }
 
   @override
@@ -36,7 +43,9 @@ class _FixturesScreenState extends State<FixturesScreen> {
             title: Text(widget.league.name),
             actions: [
               IconButton(
-                onPressed: store.loading ? null : () => store.loadForLeague(widget.league.id),
+                onPressed: store.loading
+                    ? null
+                    : () => store.loadForLeague(widget.league.id),
                 icon: const Icon(Icons.refresh),
               ),
             ],
@@ -53,58 +62,36 @@ class _FixturesScreenState extends State<FixturesScreen> {
     }
 
     if (store.error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text('Error:\n${store.error}'),
-        ),
-      );
+      return Center(child: Text('Error: ${store.error}'));
     }
 
-    final items = store.fixtures;
-    if (items.isEmpty) {
+    if (store.fixtures.isEmpty) {
       return const Center(child: Text('No fixtures'));
     }
 
     return ListView.separated(
-      itemCount: items.length,
+      itemCount: store.fixtures.length,
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (_, i) {
-        final f = items[i];
-        final when = f.kickoffAt?.toLocal().toString() ?? '-';
+        final f = store.fixtures[i];
+        final when = _formatDate(f.kickoffAt);
+
         return ListTile(
-          title: Text('${f.home} vs ${f.away}'),
-          subtitle: Text('$when • ${f.status} • run: ${f.runType ?? "-"}'),
-          trailing: _ProbsChip(
-            pHome: f.pHome,
-            pDraw: f.pDraw,
-            pAway: f.pAway,
+          title: Text('${f.homeTeam} vs ${f.awayTeam}'),
+          subtitle: Text(
+            '$when • ${f.status} • run: ${f.runType ?? '-'}',
+          ),
+          trailing: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text('H ${((f.probHome ?? 0) * 100).toStringAsFixed(0)}%'),
+              Text('D ${((f.probDraw ?? 0) * 100).toStringAsFixed(0)}%'),
+              Text('A ${((f.probAway ?? 0) * 100).toStringAsFixed(0)}%'),
+            ],
           ),
         );
       },
-    );
-  }
-}
-
-class _ProbsChip extends StatelessWidget {
-  const _ProbsChip({this.pHome, this.pDraw, this.pAway});
-
-  final double? pHome;
-  final double? pDraw;
-  final double? pAway;
-
-  String _fmt(double? v) => v == null ? '-' : (v * 100).toStringAsFixed(0) + '%';
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Text('H ${_fmt(pHome)}'),
-        Text('D ${_fmt(pDraw)}'),
-        Text('A ${_fmt(pAway)}'),
-      ],
     );
   }
 }

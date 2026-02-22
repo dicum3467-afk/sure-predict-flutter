@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../api/api_client.dart';
+import '../models/fixture_item.dart';
 import '../models/league.dart';
 import '../services/sure_predict_service.dart';
 import '../state/fixtures_store.dart';
@@ -22,12 +23,22 @@ class _FixturesScreenState extends State<FixturesScreen> {
   @override
   void initState() {
     super.initState();
+
     final api = ApiClient();
     final service = SurePredictService(api);
     store = FixturesStore(service);
 
+    // range mai mare => ligi ca Ligue 1 vor avea meciuri
     store.setDefaultDateRange(days: 30);
+
+    // primul load
     store.loadForLeague(widget.league.id, cacheFirst: true);
+  }
+
+  @override
+  void dispose() {
+    store.dispose();
+    super.dispose();
   }
 
   String _formatDate(DateTime? dt) {
@@ -53,8 +64,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
                 tooltip: 'Refresh (network)',
                 onPressed: store.loading
                     ? null
-                    : () =>
-                        store.refresh(leagueId: widget.league.id),
+                    : () => store.refresh([widget.league.id], cacheFirst: false),
                 icon: const Icon(Icons.refresh),
               ),
             ],
@@ -66,10 +76,12 @@ class _FixturesScreenState extends State<FixturesScreen> {
   }
 
   Widget _body() {
+    // loading + gol => spinner
     if (store.loading && store.fixtures.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
 
+    // eroare + gol => ecran eroare
     if (store.error != null && store.fixtures.isEmpty) {
       return Center(
         child: Padding(
@@ -78,17 +90,20 @@ class _FixturesScreenState extends State<FixturesScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'Error:\n${store.error!}',
+                'Error:\n${store.error}',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 12),
               ElevatedButton.icon(
-                onPressed: () => store.loadForLeague(
-                  widget.league.id,
-                  cacheFirst: true,
-                ),
+                onPressed: () =>
+                    store.loadForLeague(widget.league.id, cacheFirst: true),
                 icon: const Icon(Icons.refresh),
                 label: const Text('Retry'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: () => store.refresh([widget.league.id]),
+                child: const Text('Force network refresh'),
               ),
             ],
           ),
@@ -96,18 +111,48 @@ class _FixturesScreenState extends State<FixturesScreen> {
       );
     }
 
+    // gol fara eroare => "No fixtures"
     if (store.fixtures.isEmpty) {
-      return const Center(child: Text('No fixtures'));
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('No fixtures'),
+              const SizedBox(height: 8),
+              Text(
+                'Range: ${store.dateFrom ?? "-"} → ${store.dateTo ?? "-"}\n'
+                'limit=${store.limit} offset=${store.offset}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton(
+                onPressed: () => store.refresh([widget.league.id]),
+                child: const Text('Refresh'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: () {
+                  store.setDefaultDateRange(days: 60);
+                  store.refresh([widget.league.id]);
+                },
+                child: const Text('Try 60 days range'),
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
+    // listă cu footer pentru load more
     return RefreshIndicator(
-      onRefresh: () =>
-          store.refresh(leagueId: widget.league.id),
+      onRefresh: () => store.refresh([widget.league.id], cacheFirst: false),
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: store.fixtures.length + 1,
-        separatorBuilder: (_, __) =>
-            const Divider(height: 1),
+        itemCount: store.fixtures.length + 1, // + footer
+        separatorBuilder: (_, __) => const Divider(height: 1),
         itemBuilder: (context, index) {
           if (index == store.fixtures.length) {
             return _footer();
@@ -118,10 +163,8 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
           return ListTile(
             title: Text('${f.home} vs ${f.away}'),
-            subtitle: Text(
-              '$when • ${f.status} • run: ${f.runType ?? "-"}',
-            ),
-            trailing: _ProbChip(
+            subtitle: Text('$when • ${f.status} • run: ${f.runType ?? "-"}'),
+            trailing: _ProbsChip(
               pHome: f.pHome,
               pDraw: f.pDraw,
               pAway: f.pAway,
@@ -130,8 +173,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) =>
-                      MatchDetailsScreen(fixture: f),
+                  builder: (_) => MatchDetailsScreen(fixture: f),
                 ),
               );
             },
@@ -142,48 +184,63 @@ class _FixturesScreenState extends State<FixturesScreen> {
   }
 
   Widget _footer() {
+    final err = store.error;
+
     return Padding(
-      padding: const EdgeInsets.symmetric(
-          horizontal: 16, vertical: 14),
-      child: Row(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Column(
         children: [
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: store.loading
-                  ? null
-                  : () {
-                      store.setDefaultDateRange(days: 30);
-                      store.refresh(
-                          leagueId: widget.league.id);
-                    },
-              icon: const Icon(Icons.date_range),
-              label: const Text('30 days'),
-            ),
+          Text(
+            'Range: ${store.dateFrom ?? "-"} → ${store.dateTo ?? "-"} • '
+            'limit=${store.limit} offset=${store.offset}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed:
-                  (store.loading || !store.hasMore)
-                      ? null
-                      : () => store.loadMore(
-                            leagueId: widget.league.id,
-                            cacheFirst: true,
-                          ),
-              icon: store.loading
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2),
-                    )
-                  : const Icon(Icons.expand_more),
-              label: Text(
-                store.hasMore
-                    ? 'Load more'
-                    : 'No more',
-              ),
+          if (err != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              err,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12),
             ),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: store.loading
+                      ? null
+                      : () {
+                          store.setDefaultDateRange(days: 30);
+                          store.refresh([widget.league.id]);
+                        },
+                  icon: const Icon(Icons.date_range),
+                  label: const Text('30 days'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: (store.loading || !store.hasMore)
+                      ? null
+                      : () => store.loadMore([widget.league.id], cacheFirst: false),
+                  icon: store.loading
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.expand_more),
+                  label: Text(store.hasMore ? 'Load more' : 'No more'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Pull down to refresh (network)',
+            style: TextStyle(fontSize: 11),
           ),
         ],
       ),
@@ -191,8 +248,8 @@ class _FixturesScreenState extends State<FixturesScreen> {
   }
 }
 
-class _ProbChip extends StatelessWidget {
-  const _ProbChip({
+class _ProbsChip extends StatelessWidget {
+  const _ProbsChip({
     required this.pHome,
     required this.pDraw,
     required this.pAway,
@@ -202,7 +259,7 @@ class _ProbChip extends StatelessWidget {
   final double? pHome;
   final double? pDraw;
   final double? pAway;
-  final String Function(double?) fmt;
+  final String Function(double? v) fmt;
 
   @override
   Widget build(BuildContext context) {
@@ -210,12 +267,9 @@ class _ProbChip extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        Text('H ${fmt(pHome)}',
-            style: const TextStyle(fontSize: 12)),
-        Text('D ${fmt(pDraw)}',
-            style: const TextStyle(fontSize: 12)),
-        Text('A ${fmt(pAway)}',
-            style: const TextStyle(fontSize: 12)),
+        Text('H ${fmt(pHome)}', style: const TextStyle(fontSize: 12)),
+        Text('D ${fmt(pDraw)}', style: const TextStyle(fontSize: 12)),
+        Text('A ${fmt(pAway)}', style: const TextStyle(fontSize: 12)),
       ],
     );
   }

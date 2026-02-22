@@ -1,3 +1,4 @@
+// lib/state/fixtures_store.dart
 import 'package:flutter/foundation.dart';
 
 import '../models/fixture_item.dart';
@@ -20,12 +21,12 @@ class FixturesStore extends ChangeNotifier {
   // filtre
   String? status;
   String? dateFrom; // YYYY-MM-DD
-  String? dateTo;   // YYYY-MM-DD
+  String? dateTo; // YYYY-MM-DD
 
-  // ===============================
-  // ✅ setează azi → +7 zile
-  // ===============================
-  void setDefaultDates({int days = 7}) {
+  // =========================
+  // ✅ setează azi -> +7 zile
+  // =========================
+  void setDefaultDates([int days = 7]) {
     final now = DateTime.now();
     final from = DateTime(now.year, now.month, now.day);
     final to = from.add(Duration(days: days));
@@ -37,18 +38,23 @@ class FixturesStore extends ChangeNotifier {
 
     dateFrom = fmt(from);
     dateTo = fmt(to);
+    notifyListeners();
   }
 
-  // ===============================
+  // =========================
   // ✅ load pentru o ligă
-  // ===============================
+  // =========================
   Future<void> loadForLeague(String leagueUid) async {
+    // IMPORTANT: multe ligi vin goale dacă nu trimiți date_from/date_to
+    if (dateFrom == null || dateTo == null) {
+      setDefaultDates(7);
+    }
     await loadForLeagues([leagueUid]);
   }
 
-  // ===============================
-  // 🚀 LOAD CU RETRY (FOARTE IMPORTANT)
-  // ===============================
+  // =========================
+  // ✅ load cu retry (Render cold start / DNS)
+  // =========================
   Future<void> loadForLeagues(List<String> leagueUids) async {
     loading = true;
     error = null;
@@ -75,7 +81,7 @@ class FixturesStore extends ChangeNotifier {
         } catch (e) {
           if (attempt == maxAttempts) rethrow;
 
-          // 🔥 foarte important pentru Render cold start
+          // backoff mic (bun pentru Render cold start)
           await Future.delayed(Duration(seconds: 2 * attempt));
         }
       }
@@ -88,10 +94,9 @@ class FixturesStore extends ChangeNotifier {
     }
   }
 
-  // ===============================
+  // =========================
   // helpers
-  // ===============================
-
+  // =========================
   void setPaging({int? newLimit, int? newOffset}) {
     if (newLimit != null) limit = newLimit;
     if (newOffset != null) offset = newOffset;
@@ -130,3 +135,4 @@ class FixturesStore extends ChangeNotifier {
     notifyListeners();
   }
 }
+```0

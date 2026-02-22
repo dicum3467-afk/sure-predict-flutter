@@ -6,14 +6,14 @@ plugins {
 
 android {
     namespace "com.example.sure_predict"
-    compileSdkVersion 34
+    compileSdk 34
 
     defaultConfig {
         applicationId "com.example.sure_predict"
-        minSdkVersion 23
-        targetSdkVersion 34
-        versionCode flutterVersionCode.toInteger()
-        versionName flutterVersionName
+        minSdk 23
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
     }
 
     buildTypes {

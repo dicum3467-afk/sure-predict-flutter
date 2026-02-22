@@ -16,7 +16,9 @@ class MatchDetailsScreen extends StatefulWidget {
 }
 
 class _MatchDetailsScreenState extends State<MatchDetailsScreen> {
+  late final ApiClient _api;
   late final SurePredictService _service;
+
   bool loading = true;
   String? error;
   Prediction? prediction;
@@ -24,9 +26,15 @@ class _MatchDetailsScreenState extends State<MatchDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    final api = ApiClient();
-    _service = SurePredictService(api);
+    _api = ApiClient();
+    _service = SurePredictService(_api);
     _load();
+  }
+
+  @override
+  void dispose() {
+    _api.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -36,12 +44,12 @@ class _MatchDetailsScreenState extends State<MatchDetailsScreen> {
     });
 
     try {
-      final pfid = (widget.fixture.providerFixtureId ?? '').toString();
-      if (pfid.trim().isEmpty) {
-        throw Exception('provider_fixture_id lipsă în fixture_item');
+      final pfid = widget.fixture.providerFixtureId.trim();
+      if (pfid.isEmpty) {
+        throw Exception('providerFixtureId lipsă');
       }
 
-      prediction = await _service.getPrediction(pfid);
+      prediction = await _service.getPrediction(pfid, runType: 'initial');
     } catch (e) {
       error = e.toString();
     } finally {
@@ -51,36 +59,73 @@ class _MatchDetailsScreenState extends State<MatchDetailsScreen> {
     }
   }
 
-  String _fmtKickoff(dynamic kickoffAt) {
-    try {
-      if (kickoffAt == null) return '-';
-      final s = kickoffAt.toString();
-      final dt = DateTime.parse(s).toLocal();
-      return DateFormat('EEE, dd MMM yyyy • HH:mm', 'ro_RO').format(dt);
-    } catch (_) {
-      return kickoffAt?.toString() ?? '-';
-    }
+  String _formatDate(DateTime? dt) {
+    if (dt == null) return '-';
+    return DateFormat('EEE, dd MMM yyyy • HH:mm').format(dt.toLocal());
   }
 
-  String _pct(double? v) => v == null ? '-' : '${(v * 100).toStringAsFixed(0)}%';
+  String _pct(double? v) {
+    if (v == null) return '-';
+    return '${(v * 100).toStringAsFixed(0)}%';
+  }
 
-  Widget _chip(String label, String value, {bool highlight = false}) {
+  int? _bestIndex(Prediction? p) {
+    if (p == null) return null;
+    final a = p.pHome;
+    final b = p.pDraw;
+    final c = p.pAway;
+    if (a == null && b == null && c == null) return null;
+
+    final va = a ?? -1;
+    final vb = b ?? -1;
+    final vc = c ?? -1;
+
+    if (va >= vb && va >= vc) return 0;
+    if (vb >= va && vb >= vc) return 1;
+    return 2;
+  }
+
+  Widget _probTile({
+    required String label,
+    required double? value,
+    required bool highlight,
+  }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(width: 1),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(label, style: TextStyle(fontWeight: highlight ? FontWeight.w700 : FontWeight.w500)),
-          const SizedBox(width: 8),
-          Text(value, style: TextStyle(fontWeight: highlight ? FontWeight.w800 : FontWeight.w600)),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: highlight ? FontWeight.w800 : FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            _pct(value),
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: highlight ? FontWeight.w900 : FontWeight.w700,
+            ),
+          ),
         ],
       ),
     );
   }
+
+  Widget _sectionTitle(String t) => Padding(
+        padding: const EdgeInsets.only(top: 18, bottom: 10),
+        child: Text(
+          t,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -93,7 +138,7 @@ class _MatchDetailsScreenState extends State<MatchDetailsScreen> {
           IconButton(
             onPressed: loading ? null : _load,
             icon: const Icon(Icons.refresh),
-          )
+          ),
         ],
       ),
       body: Padding(
@@ -101,7 +146,19 @@ class _MatchDetailsScreenState extends State<MatchDetailsScreen> {
         child: loading
             ? const Center(child: CircularProgressIndicator())
             : (error != null)
-                ? Center(child: Text('Error:\n$error'))
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('Error:\n$error', textAlign: TextAlign.center),
+                        const SizedBox(height: 12),
+                        ElevatedButton(
+                          onPressed: _load,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  )
                 : _content(f),
       ),
     );
@@ -109,55 +166,54 @@ class _MatchDetailsScreenState extends State<MatchDetailsScreen> {
 
   Widget _content(FixtureItem f) {
     final p = prediction;
-
-    final best = p?.bestIndex; // 0 home, 1 draw, 2 away
+    final best = _bestIndex(p);
 
     return ListView(
       children: [
         Text(
           '${f.home} vs ${f.away}',
-          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
         ),
         const SizedBox(height: 6),
         Text(
-          '${_fmtKickoff(f.kickoffAt)} • ${f.status ?? '-'} • run: ${f.runType ?? '-'}',
+          '${_formatDate(f.kickoffAt)} • ${f.status} • run: ${f.runType ?? "-"}',
           style: const TextStyle(fontSize: 14),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
+        Text(
+          'provider_fixture_id: ${f.providerFixtureId}',
+          style: const TextStyle(fontSize: 12),
+        ),
 
-        const Text('1X2 Prediction', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 10),
-
+        _sectionTitle('1X2 Prediction'),
         Wrap(
           spacing: 10,
           runSpacing: 10,
           children: [
-            _chip('H', _pct(p?.pHome), highlight: best == 0),
-            _chip('D', _pct(p?.pDraw), highlight: best == 1),
-            _chip('A', _pct(p?.pAway), highlight: best == 2),
+            _probTile(label: 'H', value: p?.pHome, highlight: best == 0),
+            _probTile(label: 'D', value: p?.pDraw, highlight: best == 1),
+            _probTile(label: 'A', value: p?.pAway, highlight: best == 2),
           ],
         ),
 
-        const SizedBox(height: 18),
-        const Text('Extra', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 10),
-
+        _sectionTitle('Markets'),
         Wrap(
           spacing: 10,
           runSpacing: 10,
           children: [
-            _chip('BTTS', _pct(p?.pBtts)),
-            _chip('Over 2.5', _pct(p?.pOver25)),
-            _chip('Under 2.5', _pct(p?.pUnder25)),
+            _probTile(label: 'BTTS', value: p?.pBtts, highlight: false),
+            _probTile(label: 'Over 2.5', value: p?.pOver25, highlight: false),
+            _probTile(label: 'Under 2.5', value: p?.pUnder25, highlight: false),
           ],
         ),
 
-        const SizedBox(height: 18),
-        if (p?.computedAt != null)
+        if (p?.computedAt != null) ...[
+          _sectionTitle('Info'),
           Text(
-            'Computed: ${p!.computedAt}',
+            'Computed at: ${p!.computedAt}',
             style: const TextStyle(fontSize: 12),
           ),
+        ],
       ],
     );
   }

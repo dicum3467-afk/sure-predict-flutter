@@ -12,7 +12,7 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   intl: any
-  http: ^1.2.2
+  http: ^1.2.1
 
 flutter:
   generate: true   # 👈 OBLIGATORIU

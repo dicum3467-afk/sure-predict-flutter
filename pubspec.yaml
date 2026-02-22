@@ -9,13 +9,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-
   flutter_localizations:
     sdk: flutter
-
   intl: any
   http: ^1.2.2
-  shared_preferences: ^2.2.3
   google_mobile_ads: ^5.1.0
 
 flutter:

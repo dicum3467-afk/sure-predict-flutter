@@ -1,22 +1,20 @@
 import 'package:flutter/material.dart';
-import '../state/fixtures_store.dart';
+
 import '../services/sure_predict_service.dart';
-import '../api/api_client.dart';
+import '../state/fixtures_store.dart';
 
 class FixturesScreen extends StatefulWidget {
+  final String leagueId;
   final String leagueName;
-  final String leagueId; // UUID din backend (id)
-  final String providerLeagueId; // ex: api_39 (opțional, îl păstrăm)
-  final String country; // opțional
-  final String baseUrl;
+  final SurePredictService service;
+  final FixturesStore store;
 
   const FixturesScreen({
     super.key,
-    required this.leagueName,
     required this.leagueId,
-    required this.providerLeagueId,
-    required this.country,
-    this.baseUrl = 'https://sure-predict-backend.onrender.com',
+    required this.leagueName,
+    required this.service,
+    required this.store,
   });
 
   @override
@@ -24,76 +22,57 @@ class FixturesScreen extends StatefulWidget {
 }
 
 class _FixturesScreenState extends State<FixturesScreen> {
-  late final ApiClient api;
-  late final SurePredictService service;
-  late final FixturesStore store;
-
   @override
   void initState() {
     super.initState();
-    api = ApiClient(baseUrl: widget.baseUrl);
-    service = SurePredictService(api);
-    store = FixturesStore(service);
-
-    // Load inițial
-    store.loadInitial(widget.leagueId);
+    widget.store.loadInitial(widget.leagueId);
   }
 
-  @override
-  void dispose() {
-    api.dispose();
-    store.dispose();
-    super.dispose();
-  }
-
-  String _fmtDateTime(String s) {
-    // backend trimite "2026-02-19 14:24:31" sau ISO; încercăm să parsăm safe
-    try {
-      final dt = DateTime.parse(s.replaceFirst(' ', 'T'));
-      String two(int n) => n.toString().padLeft(2, '0');
-      return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
-    } catch (_) {
-      return s;
+  String _str(Map<String, dynamic> m, List<String> keys, [String fallback = '']) {
+    for (final k in keys) {
+      final v = m[k];
+      if (v == null) continue;
+      final s = v.toString().trim();
+      if (s.isNotEmpty) return s;
     }
+    return fallback;
   }
 
-  Widget _oddsChip(dynamic fx) {
-    final home = fx['p_home'];
-    final draw = fx['p_draw'];
-    final away = fx['p_away'];
-
-    String two(dynamic v) {
-      if (v == null) return '--';
-      if (v is num) return v.toStringAsFixed(2);
-      return v.toString();
+  num? _num(Map<String, dynamic> m, List<String> keys) {
+    for (final k in keys) {
+      final v = m[k];
+      if (v == null) continue;
+      if (v is num) return v;
+      final parsed = num.tryParse(v.toString());
+      if (parsed != null) return parsed;
     }
+    return null;
+  }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Text(
-        '1:${two(home)} X:${two(draw)} 2:${two(away)}',
-        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-      ),
+  Future<void> _showPrediction(Map<String, dynamic> fx) async {
+    final providerFixtureId = _str(
+      fx,
+      ['provider_fixture_id', 'providerFixtureId', 'fixture_id', 'fixtureId'],
+      '',
     );
-  }
-
-  void _showPredictionSheet(dynamic fx) async {
-    final providerFixtureId = fx['provider_fixture_id']?.toString();
-    if (providerFixtureId == null || providerFixtureId.isEmpty) return;
+    if (providerFixtureId.isEmpty) return;
 
     try {
-      final pred = await service.getPrediction(providerFixtureId);
+      // IMPORTANT: apel cu parametru NAMED (asta îți crăpa build-ul)
+      final pred = await widget.service.getPrediction(providerFixtureId: providerFixtureId);
+
       if (!mounted) return;
 
-      String pct(dynamic v) {
-        if (v == null) return '--';
-        if (v is num) return '${(v * 100).toStringAsFixed(1)}%';
-        return v.toString();
-      }
+      final home = _str(fx, ['home', 'home_name', 'homeTeam', 'home_team'], 'Home');
+      final away = _str(fx, ['away', 'away_name', 'awayTeam', 'away_team'], 'Away');
+
+      // încearcă să citească probabilități din pred (indiferent de chei)
+      final pHome = _num(pred, ['p_home', 'home', 'homeWin', 'home_win']);
+      final pDraw = _num(pred, ['p_draw', 'draw']);
+      final pAway = _num(pred, ['p_away', 'away', 'awayWin', 'away_win']);
+      final gg = _num(pred, ['p_gg', 'gg', 'btts']);
+      final over25 = _num(pred, ['p_over_2_5', 'over_2_5', 'over25']);
+      final under25 = _num(pred, ['p_under_2_5', 'under_2_5', 'under25']);
 
       showModalBottomSheet(
         context: context,
@@ -101,26 +80,22 @@ class _FixturesScreenState extends State<FixturesScreen> {
         builder: (_) {
           return Padding(
             padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Wrap(
+              runSpacing: 10,
               children: [
                 Text(
-                  '${fx['home']} vs ${fx['away']}',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  '$home vs $away',
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 10),
                 Text('provider_fixture_id: $providerFixtureId'),
-                const SizedBox(height: 12),
-
-                Text('Home: ${pct(pred['p_home'])}'),
-                Text('Draw: ${pct(pred['p_draw'])}'),
-                Text('Away: ${pct(pred['p_away'])}'),
-                const SizedBox(height: 10),
-                Text('GG: ${pct(pred['p_gg'])}'),
-                Text('Over 2.5: ${pct(pred['p_over25'])}'),
-                Text('Under 2.5: ${pct(pred['p_under25'])}'),
-                const SizedBox(height: 12),
+                const Divider(),
+                Text('Home: ${pHome != null ? (pHome * 100).toStringAsFixed(1) : '-'}%'),
+                Text('Draw: ${pDraw != null ? (pDraw * 100).toStringAsFixed(1) : '-'}%'),
+                Text('Away: ${pAway != null ? (pAway * 100).toStringAsFixed(1) : '-'}%'),
+                const SizedBox(height: 6),
+                Text('GG: ${gg != null ? (gg * 100).toStringAsFixed(1) : '-'}%'),
+                Text('Over 2.5: ${over25 != null ? (over25 * 100).toStringAsFixed(1) : '-'}%'),
+                Text('Under 2.5: ${under25 != null ? (under25 * 100).toStringAsFixed(1) : '-'}%'),
               ],
             ),
           );
@@ -136,118 +111,103 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.leagueName),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => store.refresh(),
-          ),
-        ],
-      ),
-      body: AnimatedBuilder(
-        animation: store,
-        builder: (context, _) {
-          if (store.isLoading && store.items.isEmpty) {
-            return const Center(child: CircularProgressIndicator());
-          }
+    return AnimatedBuilder(
+      animation: widget.store,
+      builder: (context, _) {
+        final store = widget.store;
 
-          // header range (opțional)
-          final header = Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'limit=${store.limit} offset=${store.offset}',
-                    style: TextStyle(color: Colors.black.withOpacity(0.6)),
-                  ),
-                ),
-                if (store.isLoadingMore)
-                  const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-              ],
-            ),
-          );
-
-          if (store.items.isEmpty) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('No fixtures'),
-                    const SizedBox(height: 10),
-                    ElevatedButton(
-                      onPressed: () => store.refresh(),
-                      child: const Text('Refresh'),
-                    ),
-                  ],
-                ),
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(widget.leagueName),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: store.isLoading ? null : store.refresh,
               ),
-            );
-          }
-
-          return NotificationListener<ScrollNotification>(
-            onNotification: (n) {
-              // auto-load more când ajungi aproape de fund
-              if (n.metrics.pixels >= n.metrics.maxScrollExtent - 250) {
-                store.loadMore();
+            ],
+          ),
+          body: Builder(
+            builder: (_) {
+              if (store.isLoading && store.items.isEmpty) {
+                return const Center(child: CircularProgressIndicator());
               }
-              return false;
-            },
-            child: ListView.separated(
-              itemCount: store.items.length + 1, // +1 pentru footer
-              separatorBuilder: (_, __) => const Divider(height: 0),
-              itemBuilder: (context, index) {
-                if (index == 0) return header;
 
-                final i = index - 1;
-                if (i >= store.items.length) {
-                  // footer
-                  if (!store.hasMore) {
-                    return const Padding(
-                      padding: EdgeInsets.all(18),
-                      child: Center(child: Text('End')),
-                    );
+              if (store.error != null && store.items.isEmpty) {
+                return Center(child: Text(store.error!));
+              }
+
+              if (store.items.isEmpty) {
+                return const Center(child: Text('No fixtures'));
+              }
+
+              return NotificationListener<ScrollNotification>(
+                onNotification: (n) {
+                  if (n.metrics.pixels >= n.metrics.maxScrollExtent - 200) {
+                    store.loadMore();
                   }
-                  return Padding(
-                    padding: const EdgeInsets.all(18),
-                    child: Center(
-                      child: ElevatedButton(
-                        // IMPORTANT: apel corect pentru Future<void>
-                        onPressed: () => store.loadMore(),
-                        child: const Text('Load more'),
+                  return false;
+                },
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: store.items.length + 1, // +1 footer
+                  itemBuilder: (context, index) {
+                    if (index == store.items.length) {
+                      if (store.isLoadingMore) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+                      return const SizedBox(height: 24);
+                    }
+
+                    final fx = store.items[index];
+
+                    final home = _str(fx, ['home', 'home_name', 'homeTeam', 'home_team'], 'Home');
+                    final away = _str(fx, ['away', 'away_name', 'awayTeam', 'away_team'], 'Away');
+                    final status = _str(fx, ['status'], '');
+                    final kickoff = _str(fx, ['kickoff', 'date', 'utc_date', 'fixture_date'], '');
+
+                    // odds (dacă există)
+                    final oHome = _num(fx, ['p_home', 'odds_home', 'home_odds']);
+                    final oDraw = _num(fx, ['p_draw', 'odds_draw', 'draw_odds']);
+                    final oAway = _num(fx, ['p_away', 'odds_away', 'away_odds']);
+
+                    String? rightChip;
+                    if (oHome != null || oDraw != null || oAway != null) {
+                      rightChip =
+                          '1:${oHome?.toStringAsFixed(2) ?? '-'}  X:${oDraw?.toStringAsFixed(2) ?? '-'}  2:${oAway?.toStringAsFixed(2) ?? '-'}';
+                    }
+
+                    return Card(
+                      child: ListTile(
+                        title: Text('$home vs $away'),
+                        subtitle: Text(
+                          [
+                            if (kickoff.isNotEmpty) kickoff,
+                            if (status.isNotEmpty) status,
+                          ].join(' • '),
+                        ),
+                        trailing: rightChip == null
+                            ? null
+                            : Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(20),
+                                  color: Theme.of(context).colorScheme.surfaceVariant,
+                                ),
+                                child: Text(rightChip, style: const TextStyle(fontSize: 12)),
+                              ),
+                        onTap: () => _showPrediction(fx),
                       ),
-                    ),
-                  );
-                }
-
-                final fx = store.items[i];
-                final home = fx['home']?.toString() ?? '-';
-                final away = fx['away']?.toString() ?? '-';
-                final status = fx['status']?.toString() ?? '';
-                final when = fx['start_time']?.toString() ?? fx['kickoff_at']?.toString() ?? '';
-
-                return ListTile(
-                  title: Text(
-                    '$home vs $away',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  subtitle: Text('${_fmtDateTime(when)} • $status'),
-                  trailing: _oddsChip(fx),
-                  onTap: () => _showPredictionSheet(fx),
-                );
-              },
-            ),
-          );
-        },
-      ),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }

@@ -1,11 +1,15 @@
+// lib/ui/home_shell.dart
 import 'package:flutter/material.dart';
 
 import '../state/leagues_store.dart';
 import '../state/fixtures_store.dart';
 import '../state/favorites_store.dart';
-import '../ui/leagues_screen.dart';
-import '../ui/favorites_screen.dart';
-import '../ads/banner_ad_widget.dart';
+
+import 'leagues_screen.dart';
+import 'favorites_screen.dart';
+
+// ✅ banner widget (cu Ad Unit ID-ul tău în el)
+import '../core/ads/banner_ad_widget.dart';
 
 class HomeShell extends StatefulWidget {
   final LeaguesStore leaguesStore;
@@ -33,13 +37,10 @@ class _HomeShellState extends State<HomeShell> {
     super.initState();
 
     _pages = [
-      // 🟢 TAB 1 — LEAGUES
       LeaguesScreen(
         store: widget.leaguesStore,
         favorites: widget.favoritesStore,
       ),
-
-      // ⭐ TAB 2 — FAVORITES
       FavoritesScreen(
         fixturesStore: widget.fixturesStore,
         favoritesStore: widget.favoritesStore,
@@ -50,33 +51,39 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _pages[_index],
+      body: SafeArea(
+        top: true,
+        bottom: false,
+        child: _pages[_index],
+      ),
 
-      // 🔥 NAV + ADS
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          NavigationBar(
-            selectedIndex: _index,
-            onDestinationSelected: (i) {
-              setState(() => _index = i);
-            },
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.sports_soccer),
-                label: 'Leagues',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.star),
-                label: 'Favorites',
-              ),
-            ],
-          ),
+      // ✅ Navbar + Banner fix jos
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            NavigationBar(
+              selectedIndex: _index,
+              onDestinationSelected: (i) => setState(() => _index = i),
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.sports_soccer),
+                  label: 'Leagues',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.star),
+                  label: 'Favorites',
+                ),
+              ],
+            ),
 
-          // 💰 ADMOB BANNER
-          const BannerAdWidget(),
-        ],
+            // 💰 Banner AdMob
+            const BannerAdWidget(),
+          ],
+        ),
       ),
     );
   }
 }
+```0

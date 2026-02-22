@@ -1,4 +1,3 @@
-// lib/state/fixtures_store.dart
 import 'package:flutter/foundation.dart';
 
 import '../models/fixture_item.dart';
@@ -24,7 +23,7 @@ class FixturesStore extends ChangeNotifier {
   String? dateTo; // YYYY-MM-DD
 
   // =========================
-  // ✅ setează azi -> +7 zile
+  // ✅ setează azi -> +N zile
   // =========================
   void setDefaultDates([int days = 7]) {
     final now = DateTime.now();
@@ -41,19 +40,13 @@ class FixturesStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  // =========================
   // ✅ load pentru o ligă
-  // =========================
   Future<void> loadForLeague(String leagueUid) async {
-    // IMPORTANT: multe ligi vin goale dacă nu trimiți date_from/date_to
-    if (dateFrom == null || dateTo == null) {
-      setDefaultDates(7);
-    }
     await loadForLeagues([leagueUid]);
   }
 
   // =========================
-  // ✅ load cu retry (Render cold start / DNS)
+  // ✅ LOAD CU RETRY (Render cold start / DNS / net)
   // =========================
   Future<void> loadForLeagues(List<String> leagueUids) async {
     loading = true;
@@ -81,7 +74,7 @@ class FixturesStore extends ChangeNotifier {
         } catch (e) {
           if (attempt == maxAttempts) rethrow;
 
-          // backoff mic (bun pentru Render cold start)
+          // important pt. Render cold start + rețea slabă
           await Future.delayed(Duration(seconds: 2 * attempt));
         }
       }
@@ -94,9 +87,7 @@ class FixturesStore extends ChangeNotifier {
     }
   }
 
-  // =========================
   // helpers
-  // =========================
   void setPaging({int? newLimit, int? newOffset}) {
     if (newLimit != null) limit = newLimit;
     if (newOffset != null) offset = newOffset;
@@ -135,4 +126,3 @@ class FixturesStore extends ChangeNotifier {
     notifyListeners();
   }
 }
-```0

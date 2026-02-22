@@ -1,35 +1,36 @@
 // lib/state/leagues_store.dart
 import 'package:flutter/foundation.dart';
-
-import '../api/api_client.dart';
 import '../services/sure_predict_service.dart';
 
 class LeaguesStore extends ChangeNotifier {
-  final SurePredictService service;
+  final SurePredictService _service;
 
-  LeaguesStore(this.service);
+  LeaguesStore(this._service);
 
-  bool loading = false;
+  // ===== STATE =====
+  bool isLoading = false;
   String? error;
+  final List<Map<String, dynamic>> items = [];
 
-  List<League> leagues = const [];
-
-  Future<void> loadLeagues() async {
-    loading = true;
-    error = null;
-    notifyListeners();
-
+  // ===== LOAD =====
+  Future<void> load() async {
     try {
-      leagues = await service.getLeagues();
-    } on ApiException catch (e) {
-      error = e.toString();
+      isLoading = true;
+      error = null;
+      notifyListeners();
+
+      final data = await _service.getLeagues();
+
+      items
+        ..clear()
+        ..addAll(data);
     } catch (e) {
       error = e.toString();
     } finally {
-      loading = false;
+      isLoading = false;
       notifyListeners();
     }
   }
 
-  Future<void> refresh() => loadLeagues();
+  Future<void> refresh() => load();
 }

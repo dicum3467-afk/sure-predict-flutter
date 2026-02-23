@@ -64,7 +64,7 @@ class FixturesStore extends ChangeNotifier {
       notifyListeners();
 
       final data = await _service.getFixtures(
-        leagueId: _leagueId,
+        leagueIds: [_leagueId], // ✅ FIX (listă!)
         from: _fmt(from),
         to: _fmt(to),
         limit: _limit,

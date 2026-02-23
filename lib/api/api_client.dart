@@ -11,8 +11,7 @@ class ApiException implements Exception {
   ApiException(this.message, {this.statusCode});
 
   @override
-  String toString() =>
-      'ApiException(statusCode: $statusCode, message: $message)';
+  String toString() => 'ApiException(statusCode: $statusCode, message: $message)';
 }
 
 class ApiClient {
@@ -20,11 +19,10 @@ class ApiClient {
     http.Client? client,
     String? baseUrl,
   })  : _client = client ?? http.Client(),
-        baseUrl = (baseUrl ??
-                'https://sure-predict-backend.onrender.com')
+        baseUrl = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
             .trim()
-            .replaceAll(RegExp(r'/+$'), '') {
-    // 🔥 wake up Render server
+            .replaceAll(RegExp(r'/*$'), '') {
+    // wake up Render (cold start)
     getJson('/health').catchError((_) {});
   }
 
@@ -32,39 +30,62 @@ class ApiClient {
   final String baseUrl;
 
   Uri _uri(String path, [Map<String, dynamic>? query]) {
-    final q = <String, String>{};
+    final qp = <String, String>{};
+    final qpa = <String, List<String>>{};
 
     if (query != null) {
       for (final e in query.entries) {
+        final k = e.key;
         final v = e.value;
         if (v == null) continue;
 
-        if (v is List) continue;
+        if (v is List) {
+          final list = v
+              .where((x) => x != null)
+              .map((x) => x.toString().trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
+
+          if (list.isNotEmpty) {
+            qpa[k] = list; // ✅ repeat param: k=a&k=b
+          }
+          continue;
+        }
 
         final s = v.toString().trim();
         if (s.isEmpty) continue;
-
-        q[e.key] = s;
+        qp[k] = s;
       }
     }
 
-    return Uri.parse('$baseUrl$path')
-        .replace(queryParameters: q.isEmpty ? null : q);
+    final u = Uri.parse('$baseUrl$path');
+
+    // dacă avem queryParametersAll, îl folosim (susține liste)
+    if (qpa.isNotEmpty) {
+      // combinăm și queryParameters simple în queryParametersAll
+      final all = <String, List<String>>{
+        ...qpa,
+        for (final e in qp.entries) e.key: [e.value],
+      };
+      return u.replace(queryParameters: null, queryParametersAll: all);
+    }
+
+    return u.replace(queryParameters: qp.isEmpty ? null : qp);
   }
 
   Future<dynamic> getJson(
     String path, {
     Map<String, dynamic>? query,
     Map<String, String>? headers,
-    Duration timeout = const Duration(seconds: 25), // ✅ IMPORTANT
-    int retries = 5,
-    Duration retryDelay = const Duration(seconds: 3),
+    Duration timeout = const Duration(seconds: 12),
+    int retries = 3,
+    Duration retryDelay = const Duration(seconds: 2),
   }) async {
     final uri = _uri(path, query);
 
     Object? lastError;
 
-    for (int attempt = 1; attempt <= retries + 1; attempt++) {
+    for (int attempt = 1; attempt <= (retries + 1); attempt++) {
       try {
         final res = await _client
             .get(
@@ -82,8 +103,12 @@ class ApiClient {
             final decoded = jsonDecode(res.body);
             if (decoded is Map && decoded['detail'] != null) {
               msg = decoded['detail'].toString();
+            } else {
+              msg = res.body.toString();
             }
-          } catch (_) {}
+          } catch (_) {
+            msg = res.body.toString();
+          }
           throw ApiException(msg, statusCode: res.statusCode);
         }
 
@@ -98,7 +123,7 @@ class ApiClient {
       } on FormatException {
         lastError = ApiException('Invalid JSON response');
       } on ApiException catch (e) {
-        rethrow;
+        lastError = e; // 4xx/5xx nu are rost retry
       } catch (e) {
         lastError = ApiException('Unknown error: $e');
       }
@@ -107,8 +132,7 @@ class ApiClient {
         await Future.delayed(retryDelay * attempt);
         continue;
       }
-
-      throw lastError!;
+      throw lastError ?? ApiException('Unexpected state');
     }
 
     throw ApiException('Unexpected state');

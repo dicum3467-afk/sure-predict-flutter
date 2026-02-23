@@ -14,15 +14,17 @@ class ApiException implements Exception {
   String toString() => 'ApiException(statusCode: $statusCode, message: $message)';
 }
 
-class ApiClient {
-  ApiClient({
-    http.Client? client,
-    String? baseUrl,
-  })  : _client = client ?? http.Client(),
-        baseUrl = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
-            .trim()
-            .replaceAll(RegExp(r'/$'), '');
 
+ApiClient({
+  http.Client? client,
+  String? baseUrl,
+})  : _client = client ?? http.Client(),
+      baseUrl = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
+          .trim()
+          .replaceAll(RegExp(r'/+$'), '') {
+  // 🔥 WAKE UP Render server
+  getJson('/health').catchError((_) {});
+}
   final http.Client _client;
   final String baseUrl;
 

@@ -5,6 +5,11 @@ class SurePredictService {
   final ApiClient _api;
   SurePredictService(this._api);
 
+  /// ✅ Warm-up / verificare backend (Render cold start)
+  Future<void> health() async {
+    await _api.getJson('/health');
+  }
+
   Future<List<Map<String, dynamic>>> getLeagues() async {
     final data = await _api.getJson('/leagues');
     if (data is List) {
@@ -41,11 +46,13 @@ class SurePredictService {
   Future<Map<String, dynamic>> getPrediction({required String providerFixtureId}) async {
     final data = await _api.getJson('/fixtures/$providerFixtureId/prediction');
     if (data is Map) return Map<String, dynamic>.from(data);
+
     // uneori API poate întoarce string json
     if (data is String) {
       final decoded = jsonDecode(data);
       if (decoded is Map) return Map<String, dynamic>.from(decoded);
     }
+
     return <String, dynamic>{};
   }
 }

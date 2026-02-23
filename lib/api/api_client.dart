@@ -11,55 +11,60 @@ class ApiException implements Exception {
   ApiException(this.message, {this.statusCode});
 
   @override
-  String toString() => 'ApiException(statusCode: $statusCode, message: $message)';
+  String toString() =>
+      'ApiException(statusCode: $statusCode, message: $message)';
 }
 
+class ApiClient {
+  ApiClient({
+    http.Client? client,
+    String? baseUrl,
+  })  : _client = client ?? http.Client(),
+        baseUrl = (baseUrl ??
+                'https://sure-predict-backend.onrender.com')
+            .trim()
+            .replaceAll(RegExp(r'/+$'), '') {
+    // 🔥 wake up Render server
+    getJson('/health').catchError((_) {});
+  }
 
-ApiClient({
-  http.Client? client,
-  String? baseUrl,
-})  : _client = client ?? http.Client(),
-      baseUrl = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
-          .trim()
-          .replaceAll(RegExp(r'/+$'), '') {
-  // 🔥 WAKE UP Render server
-  getJson('/health').catchError((_) {});
-}
   final http.Client _client;
   final String baseUrl;
 
   Uri _uri(String path, [Map<String, dynamic>? query]) {
     final q = <String, String>{};
+
     if (query != null) {
       for (final e in query.entries) {
         final v = e.value;
         if (v == null) continue;
 
-        if (v is List) {
-          // listele se trimit separat din service (repeat param)
-          continue;
-        }
+        if (v is List) continue;
 
         final s = v.toString().trim();
         if (s.isEmpty) continue;
+
         q[e.key] = s;
       }
     }
-    return Uri.parse('$baseUrl$path').replace(queryParameters: q.isEmpty ? null : q);
+
+    return Uri.parse('$baseUrl$path')
+        .replace(queryParameters: q.isEmpty ? null : q);
   }
 
   Future<dynamic> getJson(
     String path, {
     Map<String, dynamic>? query,
     Map<String, String>? headers,
-    Duration timeout = const Duration(seconds: 25),
+    Duration timeout = const Duration(seconds: 25), // ✅ IMPORTANT
     int retries = 5,
     Duration retryDelay = const Duration(seconds: 3),
   }) async {
     final uri = _uri(path, query);
 
     Object? lastError;
-    for (int attempt = 1; attempt <= (retries + 1); attempt++) {
+
+    for (int attempt = 1; attempt <= retries + 1; attempt++) {
       try {
         final res = await _client
             .get(
@@ -77,12 +82,8 @@ ApiClient({
             final decoded = jsonDecode(res.body);
             if (decoded is Map && decoded['detail'] != null) {
               msg = decoded['detail'].toString();
-            } else {
-              msg = res.body.toString();
             }
-          } catch (_) {
-            msg = res.body.toString();
-          }
+          } catch (_) {}
           throw ApiException(msg, statusCode: res.statusCode);
         }
 
@@ -97,8 +98,7 @@ ApiClient({
       } on FormatException {
         lastError = ApiException('Invalid JSON response');
       } on ApiException catch (e) {
-        // 4xx/5xx - de obicei nu merită retry la 4xx, dar facem retry mic oricum
-        lastError = e;
+        rethrow;
       } catch (e) {
         lastError = ApiException('Unknown error: $e');
       }
@@ -107,6 +107,7 @@ ApiClient({
         await Future.delayed(retryDelay * attempt);
         continue;
       }
+
       throw lastError!;
     }
 

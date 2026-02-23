@@ -1,119 +1,248 @@
 import 'package:flutter/material.dart';
 
-import 'fixture_ui.dart';
+import '../services/sure_predict_service.dart';
 
-class PredictionSheet extends StatelessWidget {
+/// Deschide bottom sheet cu predicția pentru un meci.
+/// IMPORTANT: trebuie să fie TOP-LEVEL (nu în clasă), ca să poți chema direct:
+/// showPredictionSheet(...)
+Future<void> showPredictionSheet({
+  required BuildContext context,
+  required SurePredictService service,
+  required Map<String, dynamic> fixture,
+  required String providerFixtureId,
+}) async {
+  await showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    showDragHandle: true,
+    builder: (_) => PredictionSheet(
+      service: service,
+      fixture: fixture,
+      providerFixtureId: providerFixtureId,
+    ),
+  );
+}
+
+class PredictionSheet extends StatefulWidget {
+  final SurePredictService service;
   final Map<String, dynamic> fixture;
-  final Map<String, dynamic> prediction;
+  final String providerFixtureId;
 
   const PredictionSheet({
     super.key,
+    required this.service,
     required this.fixture,
-    required this.prediction,
+    required this.providerFixtureId,
   });
 
   @override
-  Widget build(BuildContext context) {
-    final home = (fixture['home'] ?? '').toString();
-    final away = (fixture['away'] ?? '').toString();
-    final id = (fixture['provider_fixture_id'] ?? '').toString();
+  State<PredictionSheet> createState() => _PredictionSheetState();
+}
 
-    final best = bestBetFromMap(prediction);
+class _PredictionSheetState extends State<PredictionSheet> {
+  bool _loading = true;
+  String? _error;
+  Map<String, dynamic>? _prediction;
 
-    double? _num(dynamic v) {
-      if (v == null) return null;
+  String _str(Map<String, dynamic> m, List<String> keys, [String fallback = '']) {
+    for (final k in keys) {
+      final v = m[k];
+      if (v == null) continue;
+      final s = v.toString().trim();
+      if (s.isNotEmpty) return s;
+    }
+    return fallback;
+  }
+
+  double _num(Map<String, dynamic> m, List<String> keys, [double fallback = 0]) {
+    for (final k in keys) {
+      final v = m[k];
+      if (v == null) continue;
       if (v is num) return v.toDouble();
-      return double.tryParse(v.toString());
+      final s = v.toString().trim();
+      if (s.isEmpty) continue;
+      final parsed = double.tryParse(s);
+      if (parsed != null) return parsed;
+    }
+    return fallback;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+      _prediction = null;
+    });
+
+    try {
+      if (widget.providerFixtureId.trim().isEmpty) {
+        throw Exception('provider_fixture_id lipsă.');
+      }
+
+      final data = await widget.service.getPrediction(widget.providerFixtureId);
+      setState(() {
+        _prediction = data;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  String _pct(double v) => '${(v * 100).round()}%';
+
+  @override
+  Widget build(BuildContext context) {
+    final home = _str(widget.fixture, const ['home', 'home_name'], 'Home');
+    final away = _str(widget.fixture, const ['away', 'away_name'], 'Away');
+
+    final p = _prediction ?? const <String, dynamic>{};
+
+    // Chei compatibile cu backend-ul tău (din screenshot)
+    final pHome = _num(p, const ['p_home', 'home', 'p1']);
+    final pDraw = _num(p, const ['p_draw', 'draw', 'px']);
+    final pAway = _num(p, const ['p_away', 'away', 'p2']);
+    final pGG = _num(p, const ['p_gg', 'gg', 'btts']);
+    final pOver25 = _num(p, const ['p_over25', 'over25', 'over_2_5']);
+    final pUnder25 = _num(p, const ['p_under25', 'under25', 'under_2_5']);
+
+    // best pick simplu
+    String bestLabel = '1';
+    double best = pHome;
+    if (pDraw > best) {
+      best = pDraw;
+      bestLabel = 'X';
+    }
+    if (pAway > best) {
+      best = pAway;
+      bestLabel = '2';
     }
 
-    final homeP = _num(prediction['p_home'] ?? prediction['home']);
-    final drawP = _num(prediction['p_draw'] ?? prediction['draw']);
-    final awayP = _num(prediction['p_away'] ?? prediction['away']);
-    final ggP = _num(prediction['p_gg'] ?? prediction['gg']);
-    final over25P =
-        _num(prediction['p_over_2_5'] ?? prediction['over_2_5'] ?? prediction['p_over25'] ?? prediction['over25']);
-    final under25P =
-        _num(prediction['p_under_2_5'] ?? prediction['under_2_5'] ?? prediction['p_under25'] ?? prediction['under25']);
-
-    Widget row(String label, double? v) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Row(
-            children: [
-              SizedBox(width: 90, child: Text(label)),
-              Expanded(
-                child: Text(
-                  v == null ? '-' : pct(v),
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-        );
-
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 6,
+        bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // handle
-          Container(
-            width: 44,
-            height: 5,
-            margin: const EdgeInsets.only(bottom: 12),
-            decoration: BoxDecoration(
-              color: Colors.black12,
-              borderRadius: BorderRadius.circular(999),
-            ),
-          ),
-
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
               '$home vs $away',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.titleLarge,
             ),
           ),
           const SizedBox(height: 4),
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              'provider_fixture_id: $id',
-              style: const TextStyle(fontSize: 12, color: Colors.black54),
+              'provider_fixture_id: ${widget.providerFixtureId}',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
-
           const SizedBox(height: 12),
-          if (best != null)
+
+          if (_loading) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          ] else if (_error != null) ...[
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.04),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Theme.of(context).colorScheme.error),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.auto_awesome, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Best: ${best.label} • ${pct(best.value)}',
-                      style: const TextStyle(fontWeight: FontWeight.w700),
+                  Text(
+                    'Eroare',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                      fontWeight: FontWeight.w600,
                     ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(_error!),
+                  const SizedBox(height: 10),
+                  FilledButton.icon(
+                    onPressed: _load,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Reîncearcă'),
                   ),
                 ],
               ),
             ),
+          ] else ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.auto_awesome),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Best: $bestLabel • ${_pct(best)}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
 
-          const SizedBox(height: 12),
-          row('Home (1)', homeP),
-          row('Draw (X)', drawP),
-          row('Away (2)', awayP),
-          row('GG', ggP),
-          row('Over 2.5', over25P),
-          row('Under 2.5', under25P),
+            _Row(label: 'Home (1)', value: _pct(pHome)),
+            _Row(label: 'Draw (X)', value: _pct(pDraw)),
+            _Row(label: 'Away (2)', value: _pct(pAway)),
+            const SizedBox(height: 8),
+            _Row(label: 'GG', value: _pct(pGG)),
+            _Row(label: 'Over 2.5', value: _pct(pOver25)),
+            _Row(label: 'Under 2.5', value: _pct(pUnder25)),
+          ],
 
           const SizedBox(height: 10),
+        ],
+      ),
+    );
+  }
+}
+
+class _Row extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _Row({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(child: Text(label)),
+          Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
         ],
       ),
     );

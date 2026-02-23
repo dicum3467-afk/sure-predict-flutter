@@ -52,7 +52,7 @@ ApiClient({
     String path, {
     Map<String, dynamic>? query,
     Map<String, String>? headers,
-    Duration timeout = const Duration(seconds: 12),
+    Duration timeout = const Duration(seconds: 25),
     int retries = 5,
     Duration retryDelay = const Duration(seconds: 3),
   }) async {

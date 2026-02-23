@@ -1,19 +1,20 @@
 import 'package:flutter/material.dart';
+
 import '../services/sure_predict_service.dart';
-import '../state/fixtures_store.dart';
+import '../widgets/modal_sheet_presentation.dart';
+import 'prediction_sheet.dart';
+import 'fixture_ui.dart';
 
 class FixturesScreen extends StatefulWidget {
+  final SurePredictService service;
   final String leagueId;
   final String leagueName;
-  final SurePredictService service;
-  final FixturesStore store;
 
   const FixturesScreen({
     super.key,
+    required this.service,
     required this.leagueId,
     required this.leagueName,
-    required this.service,
-    required this.store,
   });
 
   @override
@@ -21,174 +22,159 @@ class FixturesScreen extends StatefulWidget {
 }
 
 class _FixturesScreenState extends State<FixturesScreen> {
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _fixtures = const [];
+
   @override
   void initState() {
     super.initState();
-    widget.store.loadInitial(widget.leagueId);
+    _load();
   }
 
-  String _str(Map<String, dynamic> m, List<String> keys, [String fallback = '']) {
-    for (final k in keys) {
-      final v = m[k];
-      if (v == null) continue;
-      final s = v.toString().trim();
-      if (s.isNotEmpty) return s;
-    }
-    return fallback;
-  }
-
-  num? _num(Map<String, dynamic> m, List<String> keys) {
-    for (final k in keys) {
-      final v = m[k];
-      if (v == null) continue;
-      if (v is num) return v;
-      final parsed = num.tryParse(v.toString());
-      if (parsed != null) return parsed;
-    }
-    return null;
-  }
-
-  Future<void> _showPrediction(Map<String, dynamic> fx) async {
-    final providerFixtureId = _str(fx, ['provider_fixture_id', 'providerFixtureId'], '');
-    if (providerFixtureId.isEmpty) return;
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
 
     try {
+      final now = DateTime.now();
+      final from = DateTime(now.year, now.month, now.day).toIso8601String();
+      final to = DateTime(now.year, now.month, now.day + 7).toIso8601String();
+
+      final data = await widget.service.getFixtures(
+        leagueId: widget.leagueId,
+        from: from,
+        to: to,
+      );
+
+      setState(() {
+        _fixtures = data;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _openPrediction(Map<String, dynamic> fixture) async {
+    try {
+      final providerFixtureId = fixture['provider_fixture_id']?.toString() ?? '';
+      if (providerFixtureId.isEmpty) return;
+
       final pred = await widget.service.getPrediction(providerFixtureId: providerFixtureId);
+
       if (!mounted) return;
 
-      final home = _str(fx, ['home', 'home_name'], 'Home');
-      final away = _str(fx, ['away', 'away_name'], 'Away');
-
-      final pHome = _num(pred, ['p_home', 'home']);
-      final pDraw = _num(pred, ['p_draw', 'draw']);
-      final pAway = _num(pred, ['p_away', 'away']);
-      final gg = _num(pred, ['p_gg', 'gg', 'btts']);
-      final over25 = _num(pred, ['p_over_2_5', 'over_2_5', 'over25']);
-      final under25 = _num(pred, ['p_under_2_5', 'under_2_5', 'under25']);
-
-      showModalBottomSheet(
-        context: context,
-        showDragHandle: true,
-        builder: (_) => Padding(
-          padding: const EdgeInsets.all(16),
-          child: Wrap(
-            runSpacing: 10,
-            children: [
-              Text('$home vs $away',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-              Text('provider_fixture_id: $providerFixtureId'),
-              const Divider(),
-              Text('Home: ${pHome != null ? (pHome * 100).toStringAsFixed(1) : '-'}%'),
-              Text('Draw: ${pDraw != null ? (pDraw * 100).toStringAsFixed(1) : '-'}%'),
-              Text('Away: ${pAway != null ? (pAway * 100).toStringAsFixed(1) : '-'}%'),
-              const SizedBox(height: 6),
-              Text('GG: ${gg != null ? (gg * 100).toStringAsFixed(1) : '-'}%'),
-              Text('Over 2.5: ${over25 != null ? (over25 * 100).toStringAsFixed(1) : '-'}%'),
-              Text('Under 2.5: ${under25 != null ? (under25 * 100).toStringAsFixed(1) : '-'}%'),
-            ],
-          ),
+      await showModalSheet(
+        context,
+        content: PredictionSheet(
+          fixture: fixture,
+          prediction: pred,
         ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Prediction error: $e')),
+        SnackBar(content: Text(e.toString())),
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: widget.store,
-      builder: (context, _) {
-        final store = widget.store;
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(widget.leagueName),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: store.isLoading ? null : store.refresh,
-              ),
-            ],
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.leagueName),
+        actions: [
+          IconButton(
+            onPressed: _load,
+            icon: const Icon(Icons.refresh),
           ),
-          body: Builder(
-            builder: (_) {
-              if (store.isLoading && store.items.isEmpty) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (store.error != null && store.items.isEmpty) {
-                return Center(child: Text(store.error!));
-              }
-              if (store.items.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text('No fixtures'),
-                      const SizedBox(height: 8),
-                      Text('Range: ${store.from.toLocal()} -> ${store.to.toLocal()}',
-                          style: const TextStyle(fontSize: 12)),
-                      const SizedBox(height: 12),
-                      FilledButton(
-                        onPressed: store.refresh,
-                        child: const Text('Refresh'),
-                      ),
-                      const SizedBox(height: 8),
-                      OutlinedButton(
-                        onPressed: () => store.setRangeDays(60),
-                        child: const Text('Try 60 days range'),
-                      ),
-                    ],
-                  ),
-                );
-              }
-
-              return NotificationListener<ScrollNotification>(
-                onNotification: (n) {
-                  if (n.metrics.pixels >= n.metrics.maxScrollExtent - 200) {
-                    store.loadMore();
-                  }
-                  return false;
-                },
-                child: ListView.builder(
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Center(child: Text(_error!))
+              : ListView.separated(
                   padding: const EdgeInsets.all(12),
-                  itemCount: store.items.length + 1,
-                  itemBuilder: (context, index) {
-                    if (index == store.items.length) {
-                      if (store.isLoadingMore) {
-                        return const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 16),
-                          child: Center(child: CircularProgressIndicator()),
-                        );
-                      }
-                      return const SizedBox(height: 24);
-                    }
+                  itemBuilder: (context, i) {
+                    final f = _fixtures[i];
+                    final home = (f['home'] ?? '').toString();
+                    final away = (f['away'] ?? '').toString();
+                    final status = (f['status'] ?? 'scheduled').toString();
+                    final kickoffRaw = f['kickoff'] ?? f['date'] ?? f['utcDate'];
+                    DateTime? kickoff;
+                    try {
+                      if (kickoffRaw != null) kickoff = DateTime.parse(kickoffRaw.toString());
+                    } catch (_) {}
 
-                    final fx = store.items[index];
-                    final home = _str(fx, ['home', 'home_name'], 'Home');
-                    final away = _str(fx, ['away', 'away_name'], 'Away');
-                    final status = _str(fx, ['status'], '');
-                    final kickoff = _str(fx, ['kickoff'], '');
+                    final st = statusStyle(status);
 
-                    return Card(
-                      child: ListTile(
-                        title: Text('$home vs $away'),
-                        subtitle: Text(
-                          [if (kickoff.isNotEmpty) kickoff, if (status.isNotEmpty) status].join(' • '),
+                    return InkWell(
+                      onTap: () => _openPrediction(f),
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.03),
+                          borderRadius: BorderRadius.circular(14),
                         ),
-                        onTap: () => _showPrediction(fx),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '$home vs $away',
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: st.bg,
+                                          borderRadius: BorderRadius.circular(999),
+                                        ),
+                                        child: Text(
+                                          st.text,
+                                          style: TextStyle(
+                                            color: st.fg,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Text(
+                                        kickoff == null ? '' : formatKickoff(kickoff),
+                                        style: const TextStyle(color: Colors.black54),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right),
+                          ],
+                        ),
                       ),
                     );
                   },
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemCount: _fixtures.length,
                 ),
-              );
-            },
-          ),
-        );
-      },
     );
   }
 }

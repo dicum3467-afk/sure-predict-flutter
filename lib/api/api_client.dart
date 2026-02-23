@@ -11,7 +11,8 @@ class ApiException implements Exception {
   ApiException(this.message, {this.statusCode});
 
   @override
-  String toString() => 'ApiException(statusCode: $statusCode, message: $message)';
+  String toString() =>
+      'ApiException(statusCode: $statusCode, message: $message)';
 }
 
 class ApiClient {
@@ -22,7 +23,7 @@ class ApiClient {
         baseUrl = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
             .trim()
             .replaceAll(RegExp(r'/*$'), '') {
-    // warm up backend (Render cold start)
+    // wake up Render server (cold start)
     getJson('/health').catchError((_) {});
   }
 
@@ -30,8 +31,8 @@ class ApiClient {
   final String baseUrl;
 
   Uri _uri(String path, [Map<String, dynamic>? query]) {
-    final qp = <String, String>{};
-    final qpa = <String, List<String>>{};
+    // Build a list of key/value pairs so we can support repeated params: k=a&k=b
+    final pairs = <MapEntry<String, String>>[];
 
     if (query != null) {
       for (final entry in query.entries) {
@@ -40,35 +41,38 @@ class ApiClient {
         if (v == null) continue;
 
         if (v is List) {
-          final list = v
-              .where((x) => x != null)
-              .map((x) => x.toString().trim())
-              .where((s) => s.isNotEmpty)
-              .toList();
-
-          if (list.isNotEmpty) {
-            qpa[k] = list; // repeat param: k=a&k=b
+          for (final x in v) {
+            if (x == null) continue;
+            final s = x.toString().trim();
+            if (s.isEmpty) continue;
+            pairs.add(MapEntry(k, s));
           }
           continue;
         }
 
         final s = v.toString().trim();
         if (s.isEmpty) continue;
-        qp[k] = s;
+        pairs.add(MapEntry(k, s));
       }
     }
 
-    final u = Uri.parse('$baseUrl$path');
+    final base = Uri.parse('$baseUrl$path');
 
-    if (qpa.isNotEmpty) {
-      final all = <String, List<String>>{
-        ...qpa,
-        for (final e in qp.entries) e.key: [e.value],
-      };
-      return u.replace(queryParameters: null, queryParametersAll: all);
-    }
+    if (pairs.isEmpty) return base;
 
-    return u.replace(queryParameters: qp.isEmpty ? null : qp);
+    // Merge existing query (if any) + our pairs
+    final all = <MapEntry<String, String>>[
+      ...base.queryParameters.entries,
+      ...pairs,
+    ];
+
+    // Build query string manually (supports repeated keys)
+    final q = all
+        .map((e) =>
+            '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
+        .join('&');
+
+    return base.replace(query: q);
   }
 
   Future<dynamic> getJson(
@@ -80,6 +84,7 @@ class ApiClient {
     Duration retryDelay = const Duration(seconds: 2),
   }) async {
     final uri = _uri(path, query);
+
     Object? lastError;
 
     for (int attempt = 1; attempt <= (retries + 1); attempt++) {
@@ -120,7 +125,8 @@ class ApiClient {
       } on FormatException {
         lastError = ApiException('Invalid JSON response');
       } on ApiException catch (e) {
-        lastError = e; // nu facem retry la 4xx/5xx - tu poți schimba dacă vrei
+        // 4xx/5xx - de obicei nu merită retry la 4xx
+        lastError = e;
       } catch (e) {
         lastError = ApiException('Unknown error: $e');
       }

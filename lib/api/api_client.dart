@@ -51,8 +51,8 @@ class ApiClient {
     Map<String, dynamic>? query,
     Map<String, String>? headers,
     Duration timeout = const Duration(seconds: 12),
-    int retries = 2,
-    Duration retryDelay = const Duration(seconds: 2),
+    int retries = 5,
+    Duration retryDelay = const Duration(seconds: 3),
   }) async {
     final uri = _uri(path, query);
 

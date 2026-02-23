@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/sure_predict_service.dart';
 import '../state/favorites_store.dart';
 import '../state/leagues_store.dart';
+
 import 'favorites_screen.dart';
 import 'leagues_screen.dart';
 
@@ -28,7 +29,21 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+
+    // ce aveai deja:
     widget.favoritesStore.load();
+
+    // ✅ PASUL 2: warm-up backend imediat după start
+    _warmUpBackend(); // ✅ PASUL 3: lovește /health
+  }
+
+  Future<void> _warmUpBackend() async {
+    try {
+      await widget.service.health();
+    } catch (_) {
+      // Render poate fi "adormit" -> ignorăm aici.
+      // App-ul va funcționa când backend-ul se trezește.
+    }
   }
 
   @override

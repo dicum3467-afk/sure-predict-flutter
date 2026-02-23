@@ -28,12 +28,13 @@ class _FixturesScreenState extends State<FixturesScreen> {
     super.initState();
     store = FixturesStore(widget.service);
 
-    // Load inițial
+    // load initial
     store.loadInitial(widget.leagueId);
   }
 
   @override
   void dispose() {
+    // store e ChangeNotifier; nu e obligatoriu dispose, dar e ok să-l lăsăm curat.
     store.dispose();
     super.dispose();
   }
@@ -114,7 +115,8 @@ class _FixturesScreenState extends State<FixturesScreen> {
     final home = _str(fx, const ['home', 'home_name'], 'Home');
     final away = _str(fx, const ['away', 'away_name'], 'Away');
     final status = _str(fx, const ['status'], '').toUpperCase();
-    final providerFixtureId = _str(fx, const ['provider_fixture_id', 'providerFixtureId'], '');
+    final providerFixtureId =
+        _str(fx, const ['provider_fixture_id', 'providerFixtureId'], '');
 
     return Card(
       child: ListTile(
@@ -122,7 +124,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
         subtitle: status.isEmpty ? null : Text(status),
         trailing: const Icon(Icons.chevron_right),
         onTap: () {
-          // Deschide bottom sheet cu predicția
+          // IMPORTANT: aici chemăm funcția din prediction_sheet.dart
           showPredictionSheet(
             context: context,
             service: widget.service,
@@ -149,7 +151,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
       body: AnimatedBuilder(
         animation: store,
         builder: (context, _) {
-          // Loading inițial
+          // Loading initial
           if (store.isLoading && store.items.isEmpty) {
             return const Center(child: CircularProgressIndicator());
           }
@@ -162,7 +164,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
           // Empty state când API întoarce []
           if (store.items.isEmpty) {
             return RefreshIndicator(
-              onRefresh: store.refresh,
+              onRefresh: () async => store.refresh(),
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
@@ -175,7 +177,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
           // Listă normală
           return RefreshIndicator(
-            onRefresh: store.refresh,
+            onRefresh: () async => store.refresh(),
             child: ListView.builder(
               padding: const EdgeInsets.all(12),
               itemCount: store.items.length,

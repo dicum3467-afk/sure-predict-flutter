@@ -1,20 +1,19 @@
 import 'package:flutter/material.dart';
 
 import '../services/sure_predict_service.dart';
-import '../widgets/modal_sheet_presentation.dart';
+import '../state/fixtures_store.dart';
 import 'prediction_sheet.dart';
-import 'fixture_ui.dart';
 
 class FixturesScreen extends StatefulWidget {
-  final SurePredictService service;
   final String leagueId;
   final String leagueName;
+  final SurePredictService service;
 
   const FixturesScreen({
     super.key,
-    required this.service,
     required this.leagueId,
     required this.leagueName,
+    required this.service,
   });
 
   @override
@@ -22,67 +21,117 @@ class FixturesScreen extends StatefulWidget {
 }
 
 class _FixturesScreenState extends State<FixturesScreen> {
-  bool _loading = true;
-  String? _error;
-  List<Map<String, dynamic>> _fixtures = const [];
+  late final FixturesStore store;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    store = FixturesStore(widget.service);
+
+    // Load inițial
+    store.loadInitial(widget.leagueId);
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  @override
+  void dispose() {
+    store.dispose();
+    super.dispose();
+  }
 
-    try {
-      final now = DateTime.now();
-      final from = DateTime(now.year, now.month, now.day).toIso8601String();
-      final to = DateTime(now.year, now.month, now.day + 7).toIso8601String();
-
-      final data = await widget.service.getFixtures(
-        leagueId: widget.leagueId,
-        from: from,
-        to: to,
-      );
-
-      setState(() {
-        _fixtures = data;
-        _loading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
+  String _str(Map<String, dynamic> m, List<String> keys, [String fallback = '']) {
+    for (final k in keys) {
+      final v = m[k];
+      if (v == null) continue;
+      final s = v.toString().trim();
+      if (s.isNotEmpty) return s;
     }
+    return fallback;
   }
 
-  Future<void> _openPrediction(Map<String, dynamic> fixture) async {
-    try {
-      final providerFixtureId = fixture['provider_fixture_id']?.toString() ?? '';
-      if (providerFixtureId.isEmpty) return;
-
-      final pred = await widget.service.getPrediction(providerFixtureId: providerFixtureId);
-
-      if (!mounted) return;
-
-      await showModalSheet(
-        context,
-        content: PredictionSheet(
-          fixture: fixture,
-          prediction: pred,
+  Widget _emptyState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.event_busy, size: 48),
+            const SizedBox(height: 10),
+            Text(
+              'Nu sunt meciuri pentru perioada selectată.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Apasă Refresh sau schimbă intervalul de timp.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 14),
+            FilledButton.icon(
+              onPressed: store.refresh,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh'),
+            ),
+          ],
         ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
-    }
+      ),
+    );
+  }
+
+  Widget _errorState(String message) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.wifi_off, size: 48),
+            const SizedBox(height: 10),
+            Text(
+              'Eroare la încărcare',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 14),
+            FilledButton.icon(
+              onPressed: store.refresh,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Încearcă din nou'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _fixtureTile(Map<String, dynamic> fx) {
+    final home = _str(fx, const ['home', 'home_name'], 'Home');
+    final away = _str(fx, const ['away', 'away_name'], 'Away');
+    final status = _str(fx, const ['status'], '').toUpperCase();
+    final providerFixtureId = _str(fx, const ['provider_fixture_id', 'providerFixtureId'], '');
+
+    return Card(
+      child: ListTile(
+        title: Text('$home vs $away'),
+        subtitle: status.isEmpty ? null : Text(status),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () {
+          // Deschide bottom sheet cu predicția
+          showPredictionSheet(
+            context: context,
+            service: widget.service,
+            fixture: fx,
+            providerFixtureId: providerFixtureId,
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -92,89 +141,49 @@ class _FixturesScreenState extends State<FixturesScreen> {
         title: Text(widget.leagueName),
         actions: [
           IconButton(
-            onPressed: _load,
+            onPressed: store.refresh,
             icon: const Icon(Icons.refresh),
           ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(child: Text(_error!))
-              : ListView.separated(
-                  padding: const EdgeInsets.all(12),
-                  itemBuilder: (context, i) {
-                    final f = _fixtures[i];
-                    final home = (f['home'] ?? '').toString();
-                    final away = (f['away'] ?? '').toString();
-                    final status = (f['status'] ?? 'scheduled').toString();
-                    final kickoffRaw = f['kickoff'] ?? f['date'] ?? f['utcDate'];
-                    DateTime? kickoff;
-                    try {
-                      if (kickoffRaw != null) kickoff = DateTime.parse(kickoffRaw.toString());
-                    } catch (_) {}
+      body: AnimatedBuilder(
+        animation: store,
+        builder: (context, _) {
+          // Loading inițial
+          if (store.isLoading && store.items.isEmpty) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-                    final st = statusStyle(status);
+          // Eroare + nu avem nimic încă
+          if (store.error != null && store.items.isEmpty) {
+            return _errorState(store.error!);
+          }
 
-                    return InkWell(
-                      onTap: () => _openPrediction(f),
-                      borderRadius: BorderRadius.circular(14),
-                      child: Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.03),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    '$home vs $away',
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: st.bg,
-                                          borderRadius: BorderRadius.circular(999),
-                                        ),
-                                        child: Text(
-                                          st.text,
-                                          style: TextStyle(
-                                            color: st.fg,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Text(
-                                        kickoff == null ? '' : formatKickoff(kickoff),
-                                        style: const TextStyle(color: Colors.black54),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const Icon(Icons.chevron_right),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemCount: _fixtures.length,
-                ),
+          // Empty state când API întoarce []
+          if (store.items.isEmpty) {
+            return RefreshIndicator(
+              onRefresh: store.refresh,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  const SizedBox(height: 40),
+                  _emptyState(),
+                ],
+              ),
+            );
+          }
+
+          // Listă normală
+          return RefreshIndicator(
+            onRefresh: store.refresh,
+            child: ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: store.items.length,
+              itemBuilder: (context, i) => _fixtureTile(store.items[i]),
+            ),
+          );
+        },
+      ),
     );
   }
 }

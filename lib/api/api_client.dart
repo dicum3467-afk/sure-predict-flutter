@@ -1,4 +1,3 @@
-// lib/api/api_client.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -12,8 +11,7 @@ class ApiException implements Exception {
   ApiException(this.message, {this.statusCode});
 
   @override
-  String toString() =>
-      'ApiException(statusCode: $statusCode, message: $message)';
+  String toString() => 'ApiException(statusCode: $statusCode, message: $message)';
 }
 
 class ApiClient {
@@ -24,7 +22,7 @@ class ApiClient {
         baseUrl = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
             .trim()
             .replaceAll(RegExp(r'/*$'), '') {
-    // wake up Render server (cold start)
+    // warm up backend (Render cold start)
     getJson('/health').catchError((_) {});
   }
 
@@ -32,17 +30,15 @@ class ApiClient {
   final String baseUrl;
 
   Uri _uri(String path, [Map<String, dynamic>? query]) {
-    final qp = <String, String>{}; // simple query (k=v)
-    final qpa = <String, List<String>>{}; // repeat params (k=a&k=b)
+    final qp = <String, String>{};
+    final qpa = <String, List<String>>{};
 
     if (query != null) {
-      for (final e in query.entries) {
-        final k = e.key;
-        final v = e.value;
-
+      for (final entry in query.entries) {
+        final k = entry.key;
+        final v = entry.value;
         if (v == null) continue;
 
-        // List => repeat param
         if (v is List) {
           final list = v
               .where((x) => x != null)
@@ -51,7 +47,7 @@ class ApiClient {
               .toList();
 
           if (list.isNotEmpty) {
-            qpa[k] = list;
+            qpa[k] = list; // repeat param: k=a&k=b
           }
           continue;
         }
@@ -64,26 +60,15 @@ class ApiClient {
 
     final u = Uri.parse('$baseUrl$path');
 
-    // Build query manually to support repeat params
-    final parts = <String>[];
+    if (qpa.isNotEmpty) {
+      final all = <String, List<String>>{
+        ...qpa,
+        for (final e in qp.entries) e.key: [e.value],
+      };
+      return u.replace(queryParameters: null, queryParametersAll: all);
+    }
 
-    qp.forEach((k, v) {
-      parts.add(
-        '${Uri.encodeQueryComponent(k)}=${Uri.encodeQueryComponent(v)}',
-      );
-    });
-
-    qpa.forEach((k, list) {
-      for (final v in list) {
-        final s = v.toString().trim();
-        if (s.isEmpty) continue;
-        parts.add(
-          '${Uri.encodeQueryComponent(k)}=${Uri.encodeQueryComponent(s)}',
-        );
-      }
-    });
-
-    return u.replace(query: parts.isEmpty ? null : parts.join('&'));
+    return u.replace(queryParameters: qp.isEmpty ? null : qp);
   }
 
   Future<dynamic> getJson(
@@ -94,12 +79,11 @@ class ApiClient {
     int retries = 3,
     Duration retryDelay = const Duration(seconds: 2),
   }) async {
+    final uri = _uri(path, query);
     Object? lastError;
 
-    for (int attempt = 1; attempt <= retries + 1; attempt++) {
+    for (int attempt = 1; attempt <= (retries + 1); attempt++) {
       try {
-        final uri = _uri(path, query);
-
         final res = await _client
             .get(
               uri,
@@ -136,7 +120,7 @@ class ApiClient {
       } on FormatException {
         lastError = ApiException('Invalid JSON response');
       } on ApiException catch (e) {
-        lastError = e;
+        lastError = e; // nu facem retry la 4xx/5xx - tu poți schimba dacă vrei
       } catch (e) {
         lastError = ApiException('Unknown error: $e');
       }
@@ -156,4 +140,3 @@ class ApiClient {
     _client.close();
   }
 }
-```0

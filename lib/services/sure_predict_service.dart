@@ -5,7 +5,7 @@ class SurePredictService {
   final ApiClient _api;
   SurePredictService(this._api);
 
-  /// ✅ Warm-up / verificare backend (Render cold start)
+  /// ✅ Warm-up / verificare backend
   Future<void> health() async {
     await _api.getJson('/health');
   }
@@ -18,21 +18,26 @@ class SurePredictService {
     return const [];
   }
 
+  /// ✅ FIX: trimite league_ids ca listă (repeat param)
   Future<List<Map<String, dynamic>>> getFixtures({
-    required String leagueId,
+    required List<String> leagueIds,
     required String from,
     required String to,
     int limit = 50,
     int offset = 0,
+    String runType = 'initial',
+    String? status,
   }) async {
     final data = await _api.getJson(
       '/fixtures',
       query: {
-        'league_id': leagueId,
+        'league_ids': leagueIds, // ✅ IMPORTANT (plural + list)
         'from': from,
         'to': to,
         'limit': limit,
         'offset': offset,
+        'run_type': runType,
+        if (status != null && status.trim().isNotEmpty) 'status': status.trim(),
       },
     );
 
@@ -43,11 +48,14 @@ class SurePredictService {
   }
 
   /// IMPORTANT: întoarce Map (nu clasă Prediction)
-  Future<Map<String, dynamic>> getPrediction({required String providerFixtureId}) async {
-    final data = await _api.getJson('/fixtures/$providerFixtureId/prediction');
+  Future<Map<String, dynamic>> getPrediction({
+    required String providerFixtureId,
+  }) async {
+    final data =
+        await _api.getJson('/fixtures/$providerFixtureId/prediction');
+
     if (data is Map) return Map<String, dynamic>.from(data);
 
-    // uneori API poate întoarce string json
     if (data is String) {
       final decoded = jsonDecode(data);
       if (decoded is Map) return Map<String, dynamic>.from(decoded);

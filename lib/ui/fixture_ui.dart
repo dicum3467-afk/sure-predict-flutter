@@ -9,7 +9,6 @@ String formatKickoff(DateTime dt) {
 // status -> culoare + text
 ({String text, Color bg, Color fg}) statusStyle(String status) {
   final s = status.toLowerCase().trim();
-
   if (s == 'live' || s == 'inplay' || s == 'in_play') {
     return (text: 'LIVE', bg: Colors.red.shade600, fg: Colors.white);
   }
@@ -27,18 +26,19 @@ class BestBet {
   const BestBet(this.label, this.value);
 }
 
-BestBet? bestBetFromMap(Map<String, dynamic> p) {
+BestBet? bestBetFromMap(Map p) {
   // acceptă chei diferite, după cum ai în backend
-  double? d(dynamic v) => v == null ? null : (v is num ? v.toDouble() : double.tryParse(v.toString()));
+  double? d(dynamic v) =>
+      v == null ? null : (v is num ? v.toDouble() : double.tryParse(v.toString()));
 
   final entries = <BestBet>[];
 
   final home = d(p['p_home'] ?? p['home']);
   final draw = d(p['p_draw'] ?? p['draw']);
   final away = d(p['p_away'] ?? p['away']);
-  final gg   = d(p['p_gg'] ?? p['gg']);
-  final o25  = d(p['p_over25'] ?? p['over25'] ?? p['over_2_5']);
-  final u25  = d(p['p_under25'] ?? p['under25'] ?? p['under_2_5']);
+  final gg = d(p['p_gg'] ?? p['gg']);
+  final o25 = d(p['p_over25'] ?? p['over25'] ?? p['over_2_5']);
+  final u25 = d(p['p_under25'] ?? p['under25'] ?? p['under_2_5']);
 
   if (home != null) entries.add(BestBet('1', home));
   if (draw != null) entries.add(BestBet('X', draw));

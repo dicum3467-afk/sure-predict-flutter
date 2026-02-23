@@ -69,7 +69,6 @@ class _LeaguesScreenState extends State<LeaguesScreen> {
                           leagueId: leagueId,
                           leagueName: name,
                           service: widget.service,
-                          store: FixturesStore(widget.service),
                         ),
                       ),
                     );

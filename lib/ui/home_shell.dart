@@ -4,22 +4,25 @@ import '../services/sure_predict_service.dart';
 import '../state/leagues_store.dart';
 import '../state/favorites_store.dart';
 import '../state/settings_store.dart';
-import 'settings_screen.dart';
+
 import 'top_picks_screen.dart';
 import 'fixtures_tab.dart';
 import 'leagues_screen.dart';
 import 'favorites_screen.dart';
+import 'settings_screen.dart';
 
 class HomeShell extends StatefulWidget {
   final SurePredictService service;
   final LeaguesStore leaguesStore;
   final FavoritesStore favoritesStore;
+  final SettingsStore settingsStore;
 
   const HomeShell({
     super.key,
     required this.service,
     required this.leaguesStore,
     required this.favoritesStore,
+    required this.settingsStore,
   });
 
   @override
@@ -39,6 +42,8 @@ class _HomeShellState extends State<HomeShell> {
         return 'Leagues';
       case 3:
         return 'Favorites';
+      case 4:
+        return 'Settings';
       default:
         return 'Sure Predict';
     }
@@ -47,7 +52,10 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+
     widget.favoritesStore.load();
+    widget.settingsStore.load();
+
     if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
       widget.leaguesStore.load();
     }
@@ -73,6 +81,9 @@ class _HomeShellState extends State<HomeShell> {
         service: widget.service,
         favoritesStore: widget.favoritesStore,
       ),
+      SettingsScreen(
+        settings: widget.settingsStore,
+      ),
     ];
 
     return Scaffold(
@@ -97,6 +108,7 @@ class _HomeShellState extends State<HomeShell> {
           NavigationDestination(icon: Icon(Icons.sports_soccer), label: 'Fixtures'),
           NavigationDestination(icon: Icon(Icons.public), label: 'Leagues'),
           NavigationDestination(icon: Icon(Icons.star), label: 'Favorites'),
+          NavigationDestination(icon: Icon(Icons.settings), label: 'Settings'),
         ],
       ),
     );

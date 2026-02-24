@@ -1,3 +1,111 @@
+import 'package:flutter/material.dart';
+import '../services/sure_predict_service.dart';
+
+class FixturesScreen extends StatefulWidget {
+  final SurePredictService service;
+
+  /// Dacă e [] sau null => ALL leagues
+  final List<String>? leagueIds;
+
+  /// map id -> name (poate fi gol dacă ALL)
+  final Map<String, String> leagueNamesById;
+
+  final String title;
+
+  const FixturesScreen({
+    super.key,
+    required this.service,
+    this.leagueIds,
+    required this.leagueNamesById,
+    required this.title,
+  });
+
+  @override
+  State<FixturesScreen> createState() => _FixturesScreenState();
+}
+
+class _FixturesScreenState extends State<FixturesScreen> {
+  final ScrollController _scroll = ScrollController();
+
+  // perioadă implicită (poți schimba după cum vrei)
+  String _from = '2026-02-01';
+  String _to = '2026-02-28';
+
+  String _runType = 'initial';
+  String? _status; // ex: scheduled/live/finished, etc.
+
+  // paging
+  static const int _pageSize = 50;
+  int _offset = 0;
+  bool _isLoading = false;
+  bool _hasMore = true;
+  String? _error;
+
+  // data
+  final List<Map<String, dynamic>> _items = [];
+  final Set<String> _seenKeys = {}; // dedupe
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInitial();
+
+    _scroll.addListener(() {
+      if (_scroll.position.pixels >= _scroll.position.maxScrollExtent - 240) {
+        _loadMore();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  // ---------- helpers ----------
+
+  String _fmtPct(dynamic v) {
+    if (v == null) return '-';
+    final n = (v is num) ? v.toDouble() : double.tryParse(v.toString());
+    if (n == null) return '-';
+    return '${(n * 100).toStringAsFixed(0)}%';
+  }
+
+  String _leagueTitle(String leagueId) {
+    final name = widget.leagueNamesById[leagueId];
+    return (name == null || name.trim().isEmpty) ? leagueId : name;
+  }
+
+  /// cheie stabilă pentru dedupe
+  String _itemKey(Map<String, dynamic> it) {
+    final id = (it['id'] ?? '').toString();
+    if (id.isNotEmpty) return 'id:$id';
+
+    final pf = (it['provider_fixture_id'] ?? it['providerFixtureId'] ?? '')
+        .toString();
+    final lg = (it['league_id'] ?? '').toString();
+    final ko = (it['kickoff_at'] ?? it['kickoff'] ?? '').toString();
+    final h = (it['home'] ?? '').toString();
+    final a = (it['away'] ?? '').toString();
+    return 'pf:$pf|lg:$lg|ko:$ko|$h|$a';
+  }
+
+  Map<String, List<Map<String, dynamic>>> _groupByLeague(
+    List<Map<String, dynamic>> items,
+  ) {
+    final map = <String, List<Map<String, dynamic>>>{};
+    for (final it in items) {
+      final leagueId = (it['league_id'] ?? 'unknown').toString();
+      map.putIfAbsent(leagueId, () => []).add(it);
+    }
+    return map;
+  }
+
+  List<String> _sortedLeagueIds(Map<String, List<Map<String, dynamic>>> grouped) {
+    final ids = grouped.keys.toList();
+
+    // ✅ „formula” recomandată:
     // 1) ligile cu mai multe meciuri primele
     // 2) apoi alfabetic după nume
     ids.sort((a, b) {

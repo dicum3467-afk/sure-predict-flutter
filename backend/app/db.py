@@ -16,6 +16,10 @@ def get_conn():
 
     return psycopg2.connect(db_url)
 
-# ✅ alias pentru codul care importă vechiul nume
+# alias pentru cod vechi
 def get_db_connection():
+    return get_conn()
+
+# alias pentru alte fișiere (fixtures_by_league.py)
+def get_db():
     return get_conn()

@@ -4,12 +4,17 @@ import '../services/sure_predict_service.dart';
 class FixturesScreen extends StatefulWidget {
   final SurePredictService service;
   final List<String> leagueIds;
+
+  // ⭐ id -> name
+  final Map<String, String> leagueNamesById;
+
   final String title;
 
   const FixturesScreen({
     super.key,
     required this.service,
     required this.leagueIds,
+    required this.leagueNamesById,
     required this.title,
   });
 
@@ -20,7 +25,6 @@ class FixturesScreen extends StatefulWidget {
 class _FixturesScreenState extends State<FixturesScreen> {
   late Future<List<Map<String, dynamic>>> _future;
 
-  // poți face astea editabile din UI mai târziu
   String _from = '2026-02-01';
   String _to = '2026-02-28';
   String _runType = 'initial';
@@ -33,7 +37,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
   void _load() {
     _future = widget.service.getFixtures(
-      leagueIds: widget.leagueIds, // ⭐ MULTI LEAGUE
+      leagueIds: widget.leagueIds,
       from: _from,
       to: _to,
       limit: 200,
@@ -43,9 +47,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
   }
 
   Future<void> _refresh() async {
-    setState(() {
-      _load();
-    });
+    setState(_load);
     await _future;
   }
 
@@ -64,65 +66,74 @@ class _FixturesScreenState extends State<FixturesScreen> {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: FutureBuilder<Map<String, dynamic>>(
-              future: widget.service.getPrediction(providerFixtureId: providerId),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const SizedBox(
-                    height: 200,
-                    child: Center(child: CircularProgressIndicator()),
-                  );
-                }
-
-                if (snap.hasError) {
-                  return SizedBox(
-                    height: 220,
-                    child: Center(child: Text('Eroare: ${snap.error}')),
-                  );
-                }
-
-                final pred = snap.data ?? {};
-
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${item['home']} vs ${item['away']}',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 12),
-                    _PredRow(label: '1 (Home)', value: _fmtPct(pred['p_home'])),
-                    _PredRow(label: 'X (Draw)', value: _fmtPct(pred['p_draw'])),
-                    _PredRow(label: '2 (Away)', value: _fmtPct(pred['p_away'])),
-                    const SizedBox(height: 24),
-                    _PredRow(label: 'Over 2.5', value: _fmtPct(pred['p_over25'])),
-                    _PredRow(label: 'Under 2.5', value: _fmtPct(pred['p_under25'])),
-                    const SizedBox(height: 16),
-                  ],
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: FutureBuilder<Map<String, dynamic>>(
+            future: widget.service.getPrediction(providerFixtureId: providerId),
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return const SizedBox(
+                  height: 200,
+                  child: Center(child: CircularProgressIndicator()),
                 );
-              },
-            ),
+              }
+              if (snap.hasError) {
+                return SizedBox(
+                  height: 220,
+                  child: Center(child: Text('Eroare: ${snap.error}')),
+                );
+              }
+
+              final pred = snap.data ?? {};
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${item['home']} vs ${item['away']}',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 12),
+                  _PredRow(label: '1 (Home)', value: _fmtPct(pred['p_home'])),
+                  _PredRow(label: 'X (Draw)', value: _fmtPct(pred['p_draw'])),
+                  _PredRow(label: '2 (Away)', value: _fmtPct(pred['p_away'])),
+                  const SizedBox(height: 24),
+                  _PredRow(label: 'Over 2.5', value: _fmtPct(pred['p_over25'])),
+                  _PredRow(label: 'Under 2.5', value: _fmtPct(pred['p_under25'])),
+                  const SizedBox(height: 16),
+                ],
+              );
+            },
           ),
-        );
-      },
+        ),
+      ),
     );
+  }
+
+  // ⭐ grupare: league_id -> listă fixtures
+  Map<String, List<Map<String, dynamic>>> _groupByLeague(
+    List<Map<String, dynamic>> items,
+  ) {
+    final map = <String, List<Map<String, dynamic>>>{};
+    for (final it in items) {
+      final leagueId = (it['league_id'] ?? 'unknown').toString();
+      map.putIfAbsent(leagueId, () => []).add(it);
+    }
+    return map;
+  }
+
+  String _leagueTitle(String leagueId) {
+    return widget.leagueNamesById[leagueId] ?? leagueId;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Fixtures • ${widget.title}'),
+        title: Text(widget.title),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _refresh,
-          )
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
         ],
       ),
       body: FutureBuilder<List<Map<String, dynamic>>>(
@@ -131,7 +142,6 @@ class _FixturesScreenState extends State<FixturesScreen> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-
           if (snapshot.hasError) {
             return Center(
               child: Padding(
@@ -142,37 +152,77 @@ class _FixturesScreenState extends State<FixturesScreen> {
           }
 
           final data = snapshot.data ?? [];
-
           if (data.isEmpty) {
             return const Center(child: Text('Nu există meciuri în perioada aleasă.'));
           }
 
+          final grouped = _groupByLeague(data);
+
+          // ordonăm grupurile după numele ligii (mai frumos)
+          final leagueIds = grouped.keys.toList()
+            ..sort((a, b) => _leagueTitle(a).compareTo(_leagueTitle(b)));
+
           return RefreshIndicator(
             onRefresh: _refresh,
-            child: ListView.separated(
-              itemCount: data.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (context, i) {
-                final item = data[i];
+            child: ListView.builder(
+              itemCount: leagueIds.length,
+              itemBuilder: (context, idx) {
+                final leagueId = leagueIds[idx];
+                final items = grouped[leagueId] ?? [];
 
-                final home = (item['home'] ?? '').toString();
-                final away = (item['away'] ?? '').toString();
-                final status = (item['status'] ?? '').toString();
-                final kickoff = (item['kickoff'] ?? '').toString();
+                // (optional) sort meciuri după kickoff
+                items.sort((a, b) => (a['kickoff'] ?? '').toString().compareTo(
+                      (b['kickoff'] ?? '').toString(),
+                    ));
 
-                return ListTile(
-                  title: Text('$home vs $away'),
-                  subtitle: Text('Status: $status\nKickoff: $kickoff'),
-                  isThreeLine: true,
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text('1 ${_fmtPct(item['p_home'])}'),
-                      Text('X ${_fmtPct(item['p_draw'])}'),
-                      Text('2 ${_fmtPct(item['p_away'])}'),
-                    ],
-                  ),
-                  onTap: () => _openPrediction(context, item),
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // HEADER LIGĂ
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              _leagueTitle(leagueId),
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                          Text('${items.length}'),
+                        ],
+                      ),
+                    ),
+
+                    // LISTA MECIURI DIN LIGA
+                    ...items.map((item) {
+                      final home = (item['home'] ?? '').toString();
+                      final away = (item['away'] ?? '').toString();
+                      final status = (item['status'] ?? '').toString();
+                      final kickoff = (item['kickoff'] ?? '').toString();
+
+                      return Column(
+                        children: [
+                          ListTile(
+                            title: Text('$home vs $away'),
+                            subtitle: Text('Status: $status\nKickoff: $kickoff'),
+                            isThreeLine: true,
+                            trailing: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text('1 ${_fmtPct(item['p_home'])}'),
+                                Text('X ${_fmtPct(item['p_draw'])}'),
+                                Text('2 ${_fmtPct(item['p_away'])}'),
+                              ],
+                            ),
+                            onTap: () => _openPrediction(context, item),
+                          ),
+                          const Divider(height: 1),
+                        ],
+                      );
+                    }),
+                  ],
                 );
               },
             ),

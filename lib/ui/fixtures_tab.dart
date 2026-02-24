@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../services/sure_predict_service.dart';
 import '../state/leagues_store.dart';
 import '../screens/fixtures_screen.dart';
@@ -18,108 +19,144 @@ class FixturesTab extends StatefulWidget {
 }
 
 class _FixturesTabState extends State<FixturesTab> {
+  // multi-select
   final Set<String> _selectedLeagueIds = {};
-  final Set<String> _selectedLeagueNames = {};
+
+  // search
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _search = '';
+
+  // expand/collapse per grup
+  final Set<String> _expandedGroups = {}; // keys: country
 
   @override
   void initState() {
     super.initState();
 
-    // încarcă ligile dacă nu sunt deja
+    // load leagues once
     if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
-      widget.leaguesStore.load().then((_) => _pickDefaults());
-    } else {
-      _pickDefaults();
+      widget.leaguesStore.load();
     }
+
+    _searchCtrl.addListener(() {
+      setState(() => _search = _searchCtrl.text.trim().toLowerCase());
+    });
   }
 
-  void _pickDefaults() {
-    final items = widget.leaguesStore.items;
-    if (items.isEmpty) return;
-
-    // default: primele 2 ligi (poți schimba în 1 sau 3)
-    final take = items.take(2);
-    setState(() {
-      _selectedLeagueIds
-        ..clear()
-        ..addAll(take.map((e) => (e['id'] ?? '').toString()).where((s) => s.isNotEmpty));
-      _selectedLeagueNames
-        ..clear()
-        ..addAll(take.map((e) => (e['name'] ?? '').toString()).where((s) => s.isNotEmpty));
-    });
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
   void _toggleLeague(Map<String, dynamic> league) {
     final id = (league['id'] ?? '').toString();
-    final name = (league['name'] ?? '').toString();
     if (id.isEmpty) return;
 
     setState(() {
       if (_selectedLeagueIds.contains(id)) {
         _selectedLeagueIds.remove(id);
-        if (name.isNotEmpty) _selectedLeagueNames.remove(name);
       } else {
         _selectedLeagueIds.add(id);
-        if (name.isNotEmpty) _selectedLeagueNames.add(name);
       }
     });
   }
 
-  void _selectAll() {
-    final items = widget.leaguesStore.items;
+  void _selectAllVisible(List<Map<String, dynamic>> visibleLeagues) {
     setState(() {
-      _selectedLeagueIds
-        ..clear()
-        ..addAll(items.map((e) => (e['id'] ?? '').toString()).where((s) => s.isNotEmpty));
-      _selectedLeagueNames
-        ..clear()
-        ..addAll(items.map((e) => (e['name'] ?? '').toString()).where((s) => s.isNotEmpty));
+      for (final l in visibleLeagues) {
+        final id = (l['id'] ?? '').toString();
+        if (id.isNotEmpty) _selectedLeagueIds.add(id);
+      }
     });
   }
 
-  void _clearAll() {
-    setState(() {
-      _selectedLeagueIds.clear();
-      _selectedLeagueNames.clear();
-    });
+  void _clearSelection() {
+    setState(() => _selectedLeagueIds.clear());
+  }
+
+  Map<String, List<Map<String, dynamic>>> _groupByCountry(
+    List<Map<String, dynamic>> leagues,
+  ) {
+    final Map<String, List<Map<String, dynamic>>> groups = {};
+    for (final l in leagues) {
+      final country = (l['country'] ?? 'Other').toString().trim();
+      groups.putIfAbsent(country.isEmpty ? 'Other' : country, () => []).add(l);
+    }
+
+    // sort groups alphabetically, but keep "Other" last
+    final entries = groups.entries.toList()
+      ..sort((a, b) {
+        if (a.key == 'Other' && b.key != 'Other') return 1;
+        if (b.key == 'Other' && a.key != 'Other') return -1;
+        return a.key.compareTo(b.key);
+      });
+
+    return {for (final e in entries) e.key: (e.value..sort(_leagueSort))};
+  }
+
+  static int _leagueSort(Map<String, dynamic> a, Map<String, dynamic> b) {
+    // prefer tier (if exists) then name
+    int tierA = _tryInt(a['tier']) ?? 9999;
+    int tierB = _tryInt(b['tier']) ?? 9999;
+    if (tierA != tierB) return tierA.compareTo(tierB);
+
+    final nameA = (a['name'] ?? '').toString();
+    final nameB = (b['name'] ?? '').toString();
+    return nameA.compareTo(nameB);
+  }
+
+  static int? _tryInt(dynamic v) {
+    if (v is int) return v;
+    return int.tryParse(v?.toString() ?? '');
+  }
+
+  List<Map<String, dynamic>> _filterLeagues(List<Map<String, dynamic>> leagues) {
+    if (_search.isEmpty) return leagues;
+
+    bool matches(Map<String, dynamic> l) {
+      final name = (l['name'] ?? '').toString().toLowerCase();
+      final country = (l['country'] ?? '').toString().toLowerCase();
+      final tier = (l['tier'] ?? '').toString().toLowerCase();
+      final id = (l['id'] ?? '').toString().toLowerCase();
+      return name.contains(_search) ||
+          country.contains(_search) ||
+          tier.contains(_search) ||
+          id.contains(_search);
+    }
+
+    return leagues.where(matches).toList();
+  }
+
+  void _goToFixtures() {
+    final ids = _selectedLeagueIds.toList();
+
+    // id -> name
+    final Map<String, String> namesById = {};
+    for (final l in widget.leaguesStore.items) {
+      final id = (l['id'] ?? '').toString();
+      final name = (l['name'] ?? '').toString();
+      if (id.isNotEmpty && name.isNotEmpty) namesById[id] = name;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => FixturesScreen(
+          service: widget.service,
+          leagueIds: ids,
+          leagueNamesById: namesById,
+          title: 'Fixtures',
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final leagues = widget.leaguesStore.items;
+    final allLeagues = widget.leaguesStore.items;
+    final visibleLeagues = _filterLeagues(allLeagues);
+    final groups = _groupByCountry(visibleLeagues);
 
-    if (leagues.isEmpty) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Fixtures')),
-        body: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (widget.leaguesStore.isLoading)
-                const Center(child: CircularProgressIndicator())
-              else
-                ElevatedButton(
-                  onPressed: () async {
-                    await widget.leaguesStore.load();
-                    _pickDefaults();
-                  },
-                  child: const Text('Încarcă ligile'),
-                ),
-              if (widget.leaguesStore.error != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  widget.leaguesStore.error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                )
-              ],
-            ],
-          ),
-        ),
-      );
-    }
-
-    // dacă n-ai selectat nimic, arată selectorul; dacă ai selectat, arată fixtures list
     final hasSelection = _selectedLeagueIds.isNotEmpty;
 
     return Scaffold(
@@ -127,87 +164,218 @@ class _FixturesTabState extends State<FixturesTab> {
         title: const Text('Fixtures'),
         actions: [
           IconButton(
-            tooltip: 'Selectează toate',
-            onPressed: _selectAll,
-            icon: const Icon(Icons.select_all),
-          ),
-          IconButton(
-            tooltip: 'Șterge selecția',
-            onPressed: _clearAll,
-            icon: const Icon(Icons.clear),
+            tooltip: 'Clear selection',
+            onPressed: hasSelection ? _clearSelection : null,
+            icon: const Icon(Icons.clear_all),
           ),
         ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Chips cu selecția curentă
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  if (_selectedLeagueNames.isEmpty)
-                    const Chip(label: Text('Nicio ligă selectată'))
-                  else
-                    ..._selectedLeagueNames.map((name) => Chip(label: Text(name))),
-                ],
+            // Search
+            TextField(
+              controller: _searchCtrl,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search),
+                hintText: 'Caută ligă / țară / tier / id...',
+                suffixIcon: _search.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => _searchCtrl.clear(),
+                      ),
+                border: const OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
 
-            // Selector de ligi
-            Expanded(
-              child: ListView.separated(
-                itemCount: leagues.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, i) {
-                  final l = leagues[i];
-                  final id = (l['id'] ?? '').toString();
-                  final name = (l['name'] ?? 'League').toString();
-                  final checked = _selectedLeagueIds.contains(id);
+            // Chips (selected)
+            if (hasSelection) _SelectedChips(
+              selectedIds: _selectedLeagueIds,
+              leagues: allLeagues,
+              onRemoveId: (id) => setState(() => _selectedLeagueIds.remove(id)),
+            ),
 
-                  return ListTile(
-                    title: Text(name),
-                    subtitle: Text(id),
-                    trailing: Checkbox(
-                      value: checked,
-                      onChanged: (_) => _toggleLeague(l),
-                    ),
-                    onTap: () => _toggleLeague(l),
-                  );
-                },
-              ),
+            if (hasSelection) const SizedBox(height: 10),
+
+            // Quick actions row
+            Row(
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: visibleLeagues.isEmpty
+                      ? null
+                      : () => _selectAllVisible(visibleLeagues),
+                  icon: const Icon(Icons.done_all),
+                  label: const Text('Select all'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: hasSelection ? _clearSelection : null,
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Clear'),
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed: hasSelection ? _goToFixtures : null,
+                  icon: const Icon(Icons.arrow_forward),
+                  label: Text(hasSelection
+                      ? 'Vezi meciuri (${_selectedLeagueIds.length})'
+                      : 'Vezi meciuri'),
+                ),
+              ],
             ),
 
             const SizedBox(height: 12),
 
-            // Buton: vezi meciuri pentru ligi selectate
-            onPressed: hasSelection
-    ? () {
-        final ids = _selectedLeagueIds.toList();
+            // Loading / error
+            if (widget.leaguesStore.isLoading)
+              const Expanded(
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (widget.leaguesStore.error != null)
+              Expanded(
+                child: Center(
+                  child: Text(
+                    widget.leaguesStore.error!,
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                ),
+              )
+            else if (visibleLeagues.isEmpty)
+              const Expanded(
+                child: Center(
+                  child: Text('Nu există ligi pentru filtrul curent.'),
+                ),
+              )
+            else
+              // Grouped list
+              Expanded(
+                child: ListView(
+                  children: [
+                    for (final entry in groups.entries)
+                      _CountryGroup(
+                        country: entry.key,
+                        leagues: entry.value,
+                        expanded: _search.isNotEmpty ||
+                            _expandedGroups.contains(entry.key),
+                        selectedIds: _selectedLeagueIds,
+                        onToggleExpand: () {
+                          setState(() {
+                            if (_expandedGroups.contains(entry.key)) {
+                              _expandedGroups.remove(entry.key);
+                            } else {
+                              _expandedGroups.add(entry.key);
+                            }
+                          });
+                        },
+                        onToggleLeague: _toggleLeague,
+                      ),
+                    const SizedBox(height: 80),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
-        // map id -> name (din store)
-        final Map<String, String> namesById = {};
-        for (final l in widget.leaguesStore.items) {
-          final id = (l['id'] ?? '').toString();
-          final name = (l['name'] ?? '').toString();
-          if (id.isNotEmpty && name.isNotEmpty) {
-            namesById[id] = name;
-          }
-        }
+class _CountryGroup extends StatelessWidget {
+  final String country;
+  final List<Map<String, dynamic>> leagues;
+  final bool expanded;
+  final Set<String> selectedIds;
+  final VoidCallback onToggleExpand;
+  final void Function(Map<String, dynamic> league) onToggleLeague;
 
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => FixturesScreen(
-              service: widget.service,
-              leagueIds: ids,
-              leagueNamesById: namesById,
-              title: 'Fixtures',
-            ),
+  const _CountryGroup({
+    required this.country,
+    required this.leagues,
+    required this.expanded,
+    required this.selectedIds,
+    required this.onToggleExpand,
+    required this.onToggleLeague,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedInGroup = leagues.where((l) {
+      final id = (l['id'] ?? '').toString();
+      return selectedIds.contains(id);
+    }).length;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        children: [
+          ListTile(
+            onTap: onToggleExpand,
+            title: Text(country),
+            subtitle: Text('${leagues.length} ligi • selectate: $selectedInGroup'),
+            trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
           ),
-        );
-      }
-    : null,
+          if (expanded)
+            const Divider(height: 1),
+          if (expanded)
+            ...leagues.map((l) {
+              final id = (l['id'] ?? '').toString();
+              final name = (l['name'] ?? 'League').toString();
+              final tier = (l['tier'] ?? '').toString();
+              final checked = selectedIds.contains(id);
+
+              return CheckboxListTile(
+                value: checked,
+                onChanged: (_) => onToggleLeague(l),
+                title: Text(name),
+                subtitle: Text([
+                  if (tier.isNotEmpty) 'Tier $tier',
+                  if (id.isNotEmpty) id,
+                ].join(' • ')),
+                controlAffinity: ListTileControlAffinity.trailing,
+              );
+            }),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelectedChips extends StatelessWidget {
+  final Set<String> selectedIds;
+  final List<Map<String, dynamic>> leagues;
+  final void Function(String id) onRemoveId;
+
+  const _SelectedChips({
+    required this.selectedIds,
+    required this.leagues,
+    required this.onRemoveId,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // id -> name
+    final Map<String, String> namesById = {
+      for (final l in leagues)
+        (l['id'] ?? '').toString(): (l['name'] ?? 'League').toString(),
+    };
+
+    final selectedList = selectedIds.toList()
+      ..sort((a, b) => (namesById[a] ?? a).compareTo(namesById[b] ?? b));
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final id in selectedList)
+          InputChip(
+            label: Text(namesById[id] ?? id),
+            onDeleted: () => onRemoveId(id),
+          ),
+      ],
+    );
+  }
+}

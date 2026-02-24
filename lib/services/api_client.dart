@@ -2,62 +2,45 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiClient {
-  ApiClient({
-    http.Client? client,
-    String? baseUrl,
-  })  : _client = client ?? http.Client(),
-        baseUrl = (baseUrl ?? 'https://sure-predict-backend.onrender.com')
-            .replaceAll(RegExp(r'\/+$'), ''); // taie "/" la final
+  // IMPORTANT: fără slash la final
+  static const String baseUrl = "https://sure-predict-backend.onrender.com";
 
-  final http.Client _client;
-  final String baseUrl;
-
-  Uri _uri(String path, [Map<String, dynamic>? query]) {
-    final cleanPath = path.startsWith('/') ? path : '/$path';
-    final uri = Uri.parse('$baseUrl$cleanPath');
-    return query == null ? uri : uri.replace(queryParameters: query.map((k, v) => MapEntry(k, '$v')));
-  }
-
-  Future<Map<String, dynamic>> getJsonMap(String path, {Map<String, dynamic>? query}) async {
-    final res = await _client.get(
-      _uri(path, query),
-      headers: {'Accept': 'application/json'},
+  static Future<List<dynamic>> getFixtures({
+    String runType = "initial",
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final uri = Uri.parse(
+      "$baseUrl/fixtures?run_type=$runType&limit=$limit&offset=$offset",
     );
 
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw ApiException(res.statusCode, res.body);
+    final resp = await http.get(uri, headers: {
+      "accept": "application/json",
+    });
+
+    if (resp.statusCode != 200) {
+      throw Exception("Fixtures error: ${resp.statusCode} ${resp.body}");
     }
 
-    final decoded = jsonDecode(res.body);
-    if (decoded is Map<String, dynamic>) return decoded;
-
-    throw ApiException(res.statusCode, 'Expected JSON object but got: ${decoded.runtimeType}');
+    return jsonDecode(resp.body) as List<dynamic>;
   }
 
-  Future<List<dynamic>> getJsonList(String path, {Map<String, dynamic>? query}) async {
-    final res = await _client.get(
-      _uri(path, query),
-      headers: {'Accept': 'application/json'},
+  static Future<Map<String, dynamic>> getPrediction({
+    required String providerFixtureId,
+    String runType = "initial",
+  }) async {
+    final uri = Uri.parse(
+      "$baseUrl/fixtures/$providerFixtureId/prediction?run_type=$runType",
     );
 
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw ApiException(res.statusCode, res.body);
+    final resp = await http.get(uri, headers: {
+      "accept": "application/json",
+    });
+
+    if (resp.statusCode != 200) {
+      throw Exception("Prediction error: ${resp.statusCode} ${resp.body}");
     }
 
-    final decoded = jsonDecode(res.body);
-    if (decoded is List) return decoded;
-
-    throw ApiException(res.statusCode, 'Expected JSON list but got: ${decoded.runtimeType}');
+    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
-
-  void dispose() => _client.close();
-}
-
-class ApiException implements Exception {
-  final int? statusCode;
-  final String message;
-  ApiException(this.statusCode, this.message);
-
-  @override
-  String toString() => 'ApiException(statusCode: $statusCode, message: $message)';
 }

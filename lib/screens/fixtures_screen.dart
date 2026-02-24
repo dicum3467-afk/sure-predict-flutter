@@ -27,7 +27,11 @@ class _FixturesScreenState extends State<FixturesScreen> {
   String _from = '2026-02-01';
   String _to = '2026-02-28';
   String _runType = 'initial';
-  String? _status; // optional
+  String? _status;
+
+  // strong filter
+  bool _onlyStrong = false;
+  double _strongThreshold = 0.60; // 60% default
 
   // pagination
   static const int _limit = 50;
@@ -58,8 +62,6 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
   void _onScroll() {
     if (!_hasMore || _isLoading) return;
-
-    // load more when near bottom
     if (_scroll.position.pixels >= _scroll.position.maxScrollExtent - 500) {
       _loadMore();
     }
@@ -87,20 +89,17 @@ class _FixturesScreenState extends State<FixturesScreen> {
       setState(() {
         _items.addAll(data);
         _offset += data.length;
-        _hasMore = data.length == _limit; // dacă a venit mai puțin, nu mai avem pagini
+        _hasMore = data.length == _limit;
       });
     } catch (e) {
       _showSnack('Eroare load: $e');
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   Future<void> _loadMore() async {
     if (!_hasMore || _isLoading) return;
-
     setState(() => _isLoading = true);
 
     try {
@@ -135,9 +134,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
   void _showSnack(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg)),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   String _leagueTitle(String leagueId) {
@@ -145,7 +142,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
   }
 
   // =========================
-  // ✅ NEXT LEVEL: scoring + best pick
+  // PRO: scoring + best pick
   // =========================
 
   double _num(dynamic v) {
@@ -154,8 +151,6 @@ class _FixturesScreenState extends State<FixturesScreen> {
     return double.tryParse(v.toString()) ?? 0.0;
   }
 
-  /// Returnează (label, prob) pentru best pick din fixture.
-  /// Alegem maximum dintre 1/X/2/Over2.5/Under2.5
   ({String label, double p}) _bestPick(Map<String, dynamic> it) {
     final pHome = _num(it['p_home']);
     final pDraw = _num(it['p_draw']);
@@ -183,9 +178,6 @@ class _FixturesScreenState extends State<FixturesScreen> {
     return (label: bestLabel, p: best);
   }
 
-  /// Formula de sortare (recomandare):
-  /// 1) BestPick probability (principal)
-  /// 2) Tie-breaker: max(1/X/2) apoi max(Over/Under)
   double _sortScore(Map<String, dynamic> it) {
     final best = _bestPick(it).p;
 
@@ -198,13 +190,11 @@ class _FixturesScreenState extends State<FixturesScreen> {
     final max1x2 = [pHome, pDraw, pAway].reduce((a, b) => a > b ? a : b);
     final maxOU = [pOver, pUnder].reduce((a, b) => a > b ? a : b);
 
-    // best domină, apoi 1x2, apoi OU
     return best * 1000 + max1x2 * 100 + maxOU * 10;
   }
 
   bool _isStrong(Map<String, dynamic> it) {
-    // highlight: best pick >= 0.60
-    return _bestPick(it).p >= 0.60;
+    return _bestPick(it).p >= _strongThreshold;
   }
 
   String _fmtPct(dynamic v) {
@@ -226,7 +216,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
   }
 
   // =========================
-  // Modal prediction (live)
+  // Modal prediction
   // =========================
   void _openPrediction(BuildContext context, Map<String, dynamic> item) {
     final providerId = (item['provider_fixture_id'] ?? '').toString();
@@ -246,21 +236,13 @@ class _FixturesScreenState extends State<FixturesScreen> {
               future: widget.service.getPrediction(providerFixtureId: providerId),
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
-                  return const SizedBox(
-                    height: 220,
-                    child: Center(child: CircularProgressIndicator()),
-                  );
+                  return const SizedBox(height: 220, child: Center(child: CircularProgressIndicator()));
                 }
                 if (snap.hasError) {
-                  return SizedBox(
-                    height: 220,
-                    child: Center(child: Text('Eroare: ${snap.error}')),
-                  );
+                  return SizedBox(height: 220, child: Center(child: Text('Eroare: ${snap.error}')));
                 }
 
                 final pred = snap.data ?? {};
-                // backend poate întoarce fie direct p_home/p_draw/p_away,
-                // fie alt format; păstrăm fallback pe item
                 final pHome = pred['p_home'] ?? item['p_home'];
                 final pDraw = pred['p_draw'] ?? item['p_draw'];
                 final pAway = pred['p_away'] ?? item['p_away'];
@@ -274,17 +256,14 @@ class _FixturesScreenState extends State<FixturesScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      '$home vs $away',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
+                    Text('$home vs $away', style: Theme.of(context).textTheme.titleLarge),
                     const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: [
                         _chip('BEST: ${best.label}', 'CONF ${_fmtPct(best.p)}'),
-                        if (_isStrong(item)) _chip('STRONG', '≥ 60%'),
+                        if (_isStrong(item)) _chip('STRONG', '≥ ${(_strongThreshold * 100).toStringAsFixed(0)}%'),
                       ],
                     ),
                     const SizedBox(height: 14),
@@ -340,8 +319,10 @@ class _FixturesScreenState extends State<FixturesScreen> {
   // =========================
   @override
   Widget build(BuildContext context) {
-    // group + sort în interiorul fiecărei ligi
-    final grouped = _groupByLeague(_items);
+    // ✅ apply strong filter BEFORE grouping
+    final visible = _onlyStrong ? _items.where(_isStrong).toList() : _items;
+
+    final grouped = _groupByLeague(visible);
 
     final leagueIds = grouped.keys.toList()
       ..sort((a, b) => _leagueTitle(a).compareTo(_leagueTitle(b)));
@@ -350,26 +331,26 @@ class _FixturesScreenState extends State<FixturesScreen> {
       appBar: AppBar(
         title: Text(widget.title),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _refresh,
-          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
         ],
       ),
       body: Column(
         children: [
-          // mini filter bar (pro)
-          _FiltersBar(
+          _FiltersBarPro(
             from: _from,
             to: _to,
             runType: _runType,
             status: _status,
-            onChanged: (vFrom, vTo, vRun, vStatus) {
+            onlyStrong: _onlyStrong,
+            threshold: _strongThreshold,
+            onChanged: (vFrom, vTo, vRun, vStatus, vOnlyStrong, vThreshold) {
               setState(() {
                 _from = vFrom;
                 _to = vTo;
                 _runType = vRun;
-                _status = (vStatus.trim().isEmpty) ? null : vStatus.trim();
+                _status = vStatus.trim().isEmpty ? null : vStatus.trim();
+                _onlyStrong = vOnlyStrong;
+                _strongThreshold = vThreshold;
               });
               _loadInitial();
             },
@@ -381,10 +362,16 @@ class _FixturesScreenState extends State<FixturesScreen> {
               child: _isLoading && _items.isEmpty
                   ? const Center(child: CircularProgressIndicator())
                   : (leagueIds.isEmpty)
-                      ? const Center(child: Text('Nu există meciuri pentru selecția curentă.'))
+                      ? Center(
+                          child: Text(
+                            _onlyStrong
+                                ? 'Nu există meciuri peste pragul ales.'
+                                : 'Nu există meciuri pentru selecția curentă.',
+                          ),
+                        )
                       : ListView.builder(
                           controller: _scroll,
-                          itemCount: leagueIds.length + 1, // + footer loader
+                          itemCount: leagueIds.length + 1,
                           itemBuilder: (context, idx) {
                             if (idx == leagueIds.length) {
                               if (_isLoading) {
@@ -405,7 +392,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
                             final leagueId = leagueIds[idx];
                             final items = (grouped[leagueId] ?? []).toList();
 
-                            // sortare PRO în ligă
+                            // ✅ sort PRO în ligă
                             items.sort((a, b) => _sortScore(b).compareTo(_sortScore(a)));
 
                             return Column(
@@ -438,13 +425,10 @@ class _FixturesScreenState extends State<FixturesScreen> {
                                   return InkWell(
                                     onTap: () => _openPrediction(context, it),
                                     child: Container(
-                                      decoration: BoxDecoration(
-                                        border: const Border(
-                                          bottom: BorderSide(color: Colors.white12),
-                                        ),
-                                        // highlight strong picks
-                                        color: strong ? Colors.white10 : null,
+                                      decoration: const BoxDecoration(
+                                        border: Border(bottom: BorderSide(color: Colors.white12)),
                                       ),
+                                      color: strong ? Colors.white10 : null,
                                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                                       child: Row(
                                         children: [
@@ -452,10 +436,8 @@ class _FixturesScreenState extends State<FixturesScreen> {
                                             child: Column(
                                               crossAxisAlignment: CrossAxisAlignment.start,
                                               children: [
-                                                Text(
-                                                  '$home vs $away',
-                                                  style: const TextStyle(fontWeight: FontWeight.w700),
-                                                ),
+                                                Text('$home vs $away',
+                                                    style: const TextStyle(fontWeight: FontWeight.w700)),
                                                 const SizedBox(height: 4),
                                                 Text(
                                                   'Status: $status • Kickoff: $kickoff',
@@ -468,10 +450,8 @@ class _FixturesScreenState extends State<FixturesScreen> {
                                           Column(
                                             crossAxisAlignment: CrossAxisAlignment.end,
                                             children: [
-                                              Text(
-                                                'BEST ${best.label}',
-                                                style: const TextStyle(fontWeight: FontWeight.w800),
-                                              ),
+                                              Text('BEST ${best.label}',
+                                                  style: const TextStyle(fontWeight: FontWeight.w800)),
                                               Text(
                                                 _fmtPct(best.p),
                                                 style: TextStyle(
@@ -499,49 +479,144 @@ class _FixturesScreenState extends State<FixturesScreen> {
 }
 
 // ------------------------------------------------------------
-// Filters Bar (compact) - fără date picker ca să rămână simplu.
-// Poți edita repede valori și dă reload.
+// Filters Bar PRO: DatePicker + Presets + OnlyStrong + Threshold
 // ------------------------------------------------------------
-class _FiltersBar extends StatefulWidget {
+class _FiltersBarPro extends StatefulWidget {
   final String from;
   final String to;
   final String runType;
   final String? status;
-  final void Function(String from, String to, String runType, String status) onChanged;
 
-  const _FiltersBar({
+  final bool onlyStrong;
+  final double threshold;
+
+  /// (from, to, runType, status, onlyStrong, threshold)
+  final void Function(
+    String from,
+    String to,
+    String runType,
+    String status,
+    bool onlyStrong,
+    double threshold,
+  ) onChanged;
+
+  const _FiltersBarPro({
     required this.from,
     required this.to,
     required this.runType,
     required this.status,
+    required this.onlyStrong,
+    required this.threshold,
     required this.onChanged,
   });
 
   @override
-  State<_FiltersBar> createState() => _FiltersBarState();
+  State<_FiltersBarPro> createState() => _FiltersBarProState();
 }
 
-class _FiltersBarState extends State<_FiltersBar> {
-  late final TextEditingController _fromCtrl;
-  late final TextEditingController _toCtrl;
-  late final TextEditingController _statusCtrl;
+class _FiltersBarProState extends State<_FiltersBarPro> {
+  late DateTime _from;
+  late DateTime _to;
   String _runType = 'initial';
+  late final TextEditingController _statusCtrl;
+
+  bool _onlyStrong = false;
+  double _threshold = 0.60;
 
   @override
   void initState() {
     super.initState();
-    _fromCtrl = TextEditingController(text: widget.from);
-    _toCtrl = TextEditingController(text: widget.to);
-    _statusCtrl = TextEditingController(text: widget.status ?? '');
+    _from = _parseDate(widget.from) ?? DateTime.now();
+    _to = _parseDate(widget.to) ?? DateTime.now().add(const Duration(days: 7));
     _runType = widget.runType;
+    _statusCtrl = TextEditingController(text: widget.status ?? '');
+    _onlyStrong = widget.onlyStrong;
+    _threshold = widget.threshold;
   }
 
   @override
   void dispose() {
-    _fromCtrl.dispose();
-    _toCtrl.dispose();
     _statusCtrl.dispose();
     super.dispose();
+  }
+
+  DateTime? _parseDate(String s) {
+    try {
+      final parts = s.split('-');
+      if (parts.length != 3) return null;
+      return DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _fmt(DateTime d) {
+    String two(int x) => x < 10 ? '0$x' : '$x';
+    return '${d.year}-${two(d.month)}-${two(d.day)}';
+  }
+
+  Future<void> _pickFrom() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _from,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() {
+      _from = DateTime(picked.year, picked.month, picked.day);
+      if (_to.isBefore(_from)) _to = _from;
+    });
+  }
+
+  Future<void> _pickTo() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _to,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() {
+      _to = DateTime(picked.year, picked.month, picked.day);
+      if (_to.isBefore(_from)) _from = _to;
+    });
+  }
+
+  void _applyPreset(String preset) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    setState(() {
+      switch (preset) {
+        case 'today':
+          _from = today;
+          _to = today;
+          break;
+        case 'next7':
+          _from = today;
+          _to = today.add(const Duration(days: 7));
+          break;
+        case 'next30':
+          _from = today;
+          _to = today.add(const Duration(days: 30));
+          break;
+        case 'month':
+          _from = DateTime(today.year, today.month, 1);
+          _to = DateTime(today.year, today.month + 1, 0);
+          break;
+      }
+    });
+  }
+
+  void _submit() {
+    widget.onChanged(
+      _fmt(_from),
+      _fmt(_to),
+      _runType,
+      _statusCtrl.text.trim(),
+      _onlyStrong,
+      _threshold,
+    );
   }
 
   @override
@@ -550,32 +625,46 @@ class _FiltersBarState extends State<_FiltersBar> {
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       child: Column(
         children: [
+          // Presets
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                OutlinedButton(onPressed: () => _applyPreset('today'), child: const Text('Today')),
+                const SizedBox(width: 8),
+                OutlinedButton(onPressed: () => _applyPreset('next7'), child: const Text('Next 7 days')),
+                const SizedBox(width: 8),
+                OutlinedButton(onPressed: () => _applyPreset('next30'), child: const Text('Next 30 days')),
+                const SizedBox(width: 8),
+                OutlinedButton(onPressed: () => _applyPreset('month'), child: const Text('This month')),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // Date pickers
           Row(
             children: [
               Expanded(
-                child: TextField(
-                  controller: _fromCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'date_from (YYYY-MM-DD)',
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                  ),
+                child: OutlinedButton.icon(
+                  onPressed: _pickFrom,
+                  icon: const Icon(Icons.date_range),
+                  label: Text('From: ${_fmt(_from)}'),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: TextField(
-                  controller: _toCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'date_to (YYYY-MM-DD)',
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                  ),
+                child: OutlinedButton.icon(
+                  onPressed: _pickTo,
+                  icon: const Icon(Icons.event),
+                  label: Text('To: ${_fmt(_to)}'),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 10),
+
+          // run_type + status
           Row(
             children: [
               Expanded(
@@ -586,10 +675,7 @@ class _FiltersBarState extends State<_FiltersBar> {
                     DropdownMenuItem(value: 'latest', child: Text('run_type: latest')),
                   ],
                   onChanged: (v) => setState(() => _runType = v ?? 'initial'),
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                  ),
+                  decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
                 ),
               ),
               const SizedBox(width: 10),
@@ -603,16 +689,31 @@ class _FiltersBarState extends State<_FiltersBar> {
                   ),
                 ),
               ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // strong toggle + threshold + load
+          Row(
+            children: [
+              FilterChip(
+                selected: _onlyStrong,
+                onSelected: (v) => setState(() => _onlyStrong = v),
+                label: const Text('Only strong'),
+              ),
               const SizedBox(width: 10),
+              DropdownButton<double>(
+                value: _threshold,
+                items: const [
+                  DropdownMenuItem(value: 0.60, child: Text('60%')),
+                  DropdownMenuItem(value: 0.65, child: Text('65%')),
+                  DropdownMenuItem(value: 0.70, child: Text('70%')),
+                ],
+                onChanged: (v) => setState(() => _threshold = v ?? 0.60),
+              ),
+              const Spacer(),
               FilledButton.icon(
-                onPressed: () {
-                  widget.onChanged(
-                    _fromCtrl.text.trim(),
-                    _toCtrl.text.trim(),
-                    _runType,
-                    _statusCtrl.text.trim(),
-                  );
-                },
+                onPressed: _submit,
                 icon: const Icon(Icons.play_arrow),
                 label: const Text('Load'),
               ),

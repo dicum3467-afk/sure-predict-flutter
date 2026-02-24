@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from typing import Optional, List
 
-from app.db import get_db
+from app.db import get_conn
 
 router = APIRouter(prefix="/fixtures", tags=["fixtures"])
 

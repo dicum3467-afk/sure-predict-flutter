@@ -19,22 +19,21 @@ class FixturesTab extends StatefulWidget {
 }
 
 class _FixturesTabState extends State<FixturesTab> {
-  // ✅ Multi-select
+  // Multi-select
   final Set<String> _selectedLeagueIds = <String>{};
 
-  // ✅ Search
+  // Search
   final TextEditingController _searchCtrl = TextEditingController();
   String _search = '';
 
-  // ✅ Expand/collapse
-  final Set<String> _expandedCountries = <String>{}; // key: country
-  final Set<String> _expandedTiers = <String>{}; // key: "$country|$tier"
+  // Expand states
+  final Set<String> _expandedCountries = <String>{}; // "England"
+  final Set<String> _expandedTiers = <String>{}; // "England|Tier 1"
 
   @override
   void initState() {
     super.initState();
 
-    // load leagues dacă nu sunt încă
     if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
       widget.leaguesStore.load();
     }
@@ -102,10 +101,10 @@ class _FixturesTabState extends State<FixturesTab> {
       out[country]![tier]!.add(l);
     }
 
-    // sort in each tier by name
-    for (final country in out.keys) {
-      for (final tier in out[country]!.keys) {
-        out[country]![tier]!.sort((a, b) {
+    // sortare ligile în tier după nume
+    for (final c in out.keys) {
+      for (final t in out[c]!.keys) {
+        out[c]![t]!.sort((a, b) {
           final na = (a['name'] ?? '').toString().toLowerCase();
           final nb = (b['name'] ?? '').toString().toLowerCase();
           return na.compareTo(nb);
@@ -118,7 +117,6 @@ class _FixturesTabState extends State<FixturesTab> {
 
   List<String> _sortedCountries(Iterable<String> countries) {
     final list = countries.toList();
-    // recomandare: alfabet + "Other" la final
     list.sort((a, b) {
       if (a == 'Other' && b != 'Other') return 1;
       if (b == 'Other' && a != 'Other') return -1;
@@ -135,7 +133,6 @@ class _FixturesTabState extends State<FixturesTab> {
     }
 
     final list = tiers.toList();
-    // Tier 1,2,3... apoi necunoscute
     list.sort((a, b) => tierNum(a).compareTo(tierNum(b)));
     return list;
   }
@@ -166,26 +163,26 @@ class _FixturesTabState extends State<FixturesTab> {
 
   void _clearSelection() => setState(() => _selectedLeagueIds.clear());
 
-  void _goToFixtures() {
-    final ids = _selectedLeagueIds.toList();
-
-    // map id -> name
-    final Map<String, String> namesById = {};
+  Map<String, String> _leagueNamesById() {
+    final Map<String, String> out = {};
     for (final l in widget.leaguesStore.items) {
       final id = (l['id'] ?? '').toString();
       final name = (l['name'] ?? '').toString();
-      if (id.isNotEmpty && name.isNotEmpty) namesById[id] = name;
+      if (id.isNotEmpty && name.isNotEmpty) out[id] = name;
     }
+    return out;
+  }
+
+  void _goToFixtures() {
+    final ids = _selectedLeagueIds.toList();
 
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FixturesScreen(
           service: widget.service,
-          leagueIds: ids.isEmpty ? null : ids, // ✅ ALL leagues dacă nimic selectat
-          leagueNamesById: namesById,
-          title: ids.isEmpty
-              ? 'Fixtures (All leagues)'
-              : 'Fixtures (${ids.length} leagues)',
+          leagueIds: ids, // ✅ dacă e gol => ALL leagues (service nu trimite league_ids)
+          leagueNamesById: _leagueNamesById(),
+          title: ids.isEmpty ? 'Fixtures (All leagues)' : 'Fixtures (${ids.length} leagues)',
         ),
       ),
     );
@@ -202,22 +199,12 @@ class _FixturesTabState extends State<FixturesTab> {
     final hasSelection = _selectedLeagueIds.isNotEmpty;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Fixtures'),
-        actions: [
-          IconButton(
-            tooltip: 'Refresh leagues',
-            icon: const Icon(Icons.refresh),
-            onPressed: () => widget.leaguesStore.refresh(),
-          ),
-        ],
-      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // SEARCH
+            // Search
             TextField(
               controller: _searchCtrl,
               decoration: InputDecoration(
@@ -234,7 +221,7 @@ class _FixturesTabState extends State<FixturesTab> {
             ),
             const SizedBox(height: 12),
 
-            // CHIPS (selected)
+            // Selected chips
             if (hasSelection)
               _SelectedChips(
                 selectedIds: _selectedLeagueIds,
@@ -244,15 +231,13 @@ class _FixturesTabState extends State<FixturesTab> {
 
             if (hasSelection) const SizedBox(height: 10),
 
-            // ACTIONS
+            // Actions
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
                 FilledButton.tonalIcon(
-                  onPressed: visibleLeagues.isEmpty
-                      ? null
-                      : () => _selectAllVisible(visibleLeagues),
+                  onPressed: visibleLeagues.isEmpty ? null : () => _selectAllVisible(visibleLeagues),
                   icon: const Icon(Icons.done_all),
                   label: const Text('Select all visible'),
                 ),
@@ -262,25 +247,19 @@ class _FixturesTabState extends State<FixturesTab> {
                   label: const Text('Clear'),
                 ),
                 FilledButton.icon(
-                  // ✅ "ALL leagues" default: dacă nu ai selectat nimic, e ok, butonul e activ
+                  // ✅ ALL leagues default: chiar dacă n-ai selectat nimic, e OK
                   onPressed: _goToFixtures,
                   icon: const Icon(Icons.arrow_forward),
-                  label: Text(
-                    hasSelection
-                        ? 'Vezi meciuri (${_selectedLeagueIds.length})'
-                        : 'Vezi meciuri (All)',
-                  ),
+                  label: Text(hasSelection ? 'Vezi meciuri (${_selectedLeagueIds.length})' : 'Vezi meciuri (All)'),
                 ),
               ],
             ),
 
             const SizedBox(height: 12),
 
-            // CONTENT
+            // Content
             if (widget.leaguesStore.isLoading)
-              const Expanded(
-                child: Center(child: CircularProgressIndicator()),
-              )
+              const Expanded(child: Center(child: CircularProgressIndicator()))
             else if (widget.leaguesStore.error != null)
               Expanded(
                 child: Center(
@@ -292,9 +271,7 @@ class _FixturesTabState extends State<FixturesTab> {
                 ),
               )
             else if (visibleLeagues.isEmpty)
-              const Expanded(
-                child: Center(child: Text('Nu există ligi pentru filtrul curent.')),
-              )
+              const Expanded(child: Center(child: Text('Nu există ligi pentru filtrul curent.')))
             else
               Expanded(
                 child: ListView(
@@ -303,8 +280,7 @@ class _FixturesTabState extends State<FixturesTab> {
                       _CountryCard(
                         country: country,
                         tiers: grouped[country]!,
-                        isCountryExpanded: _search.isNotEmpty ||
-                            _expandedCountries.contains(country),
+                        isCountryExpanded: _search.isNotEmpty || _expandedCountries.contains(country),
                         expandedTierKeys: _expandedTiers,
                         selectedIds: _selectedLeagueIds,
                         onToggleCountry: () {
@@ -406,9 +382,7 @@ class _CountryCard extends StatelessWidget {
             onTap: onToggleCountry,
             title: Text(country),
             subtitle: Text('$total ligi · selectate: $selected'),
-            trailing: Icon(
-              isCountryExpanded ? Icons.expand_less : Icons.expand_more,
-            ),
+            trailing: Icon(isCountryExpanded ? Icons.expand_less : Icons.expand_more),
           ),
           if (isCountryExpanded) const Divider(height: 1),
 
@@ -426,9 +400,7 @@ class _CountryCard extends StatelessWidget {
                     onTap: () => onToggleTier(tierKey),
                     title: Text(tierLabel),
                     subtitle: Text('${list.length} ligi · selectate: $selInTier'),
-                    trailing: Icon(
-                      expanded ? Icons.expand_less : Icons.expand_more,
-                    ),
+                    trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
                   ),
                   if (expanded) const Divider(height: 1),
                   if (expanded)
@@ -475,9 +447,7 @@ class _SelectedChips extends StatelessWidget {
     }
 
     final selectedList = selectedIds.toList()
-      ..sort((a, b) => (namesById[a] ?? a)
-          .toLowerCase()
-          .compareTo((namesById[b] ?? b).toLowerCase()));
+      ..sort((a, b) => (namesById[a] ?? a).toLowerCase().compareTo((namesById[b] ?? b).toLowerCase()));
 
     return Wrap(
       spacing: 8,

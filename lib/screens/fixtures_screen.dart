@@ -1,8 +1,17 @@
 import 'package:flutter/material.dart';
-import '../services/api_client.dart';
+import '../services/sure_predict_service.dart';
 
 class FixturesScreen extends StatefulWidget {
-  const FixturesScreen({super.key});
+  final SurePredictService service;
+  final String leagueId;
+  final String leagueName;
+
+  const FixturesScreen({
+    super.key,
+    required this.service,
+    required this.leagueId,
+    required this.leagueName,
+  });
 
   @override
   State<FixturesScreen> createState() => _FixturesScreenState();
@@ -11,16 +20,29 @@ class FixturesScreen extends StatefulWidget {
 class _FixturesScreenState extends State<FixturesScreen> {
   late Future<List<Map<String, dynamic>>> _future;
 
+  // poți schimba intervalul cum vrei
+  final String _from = '2026-02-01';
+  final String _to = '2026-02-28';
+
   @override
   void initState() {
     super.initState();
-    _future = ApiClient.getFixtures(runType: 'initial', limit: 50, offset: 0);
+    _future = _load();
+  }
+
+  Future<List<Map<String, dynamic>>> _load() {
+    return widget.service.getFixtures(
+      leagueIds: [widget.leagueId], // IMPORTANT: listă
+      from: _from,
+      to: _to,
+      runType: 'initial',
+      limit: 50,
+      offset: 0,
+    );
   }
 
   Future<void> _refresh() async {
-    setState(() {
-      _future = ApiClient.getFixtures(runType: 'initial', limit: 50, offset: 0);
-    });
+    setState(() => _future = _load());
     await _future;
   }
 
@@ -44,38 +66,40 @@ class _FixturesScreenState extends State<FixturesScreen> {
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: FutureBuilder<Map<String, dynamic>>(
-              future: ApiClient.getPrediction(providerId),
+              future: widget.service.getPrediction(providerFixtureId: providerId),
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return const SizedBox(
-                    height: 200,
+                    height: 220,
                     child: Center(child: CircularProgressIndicator()),
                   );
                 }
+
                 if (snap.hasError) {
                   return SizedBox(
                     height: 220,
-                    child: Center(
-                      child: Text('Eroare: ${snap.error}'),
-                    ),
+                    child: Center(child: Text('Eroare: ${snap.error}')),
                   );
                 }
 
-                final pred = snap.data ?? {};
-                // backend-ul tău poate returna fie direct p_home/p_draw/p_away,
-                // fie un obiect mai complex. Aici încercăm direct:
+                final pred = snap.data ?? <String, dynamic>{};
+
+                // backend-ul poate întoarce fie câmpuri direct, fie un obiect
                 final pHome = pred['p_home'] ?? item['p_home'];
                 final pDraw = pred['p_draw'] ?? item['p_draw'];
                 final pAway = pred['p_away'] ?? item['p_away'];
                 final pOver = pred['p_over25'] ?? item['p_over25'];
                 final pUnder = pred['p_under25'] ?? item['p_under25'];
 
+                final home = (item['home'] ?? '').toString();
+                final away = (item['away'] ?? '').toString();
+
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '${(item['home'] ?? '').toString()} vs ${(item['away'] ?? '').toString()}',
+                      '$home vs $away',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: 12),
@@ -85,7 +109,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
                     const Divider(height: 24),
                     _PredRow(label: 'Over 2.5', value: _fmtPct(pOver)),
                     _PredRow(label: 'Under 2.5', value: _fmtPct(pUnder)),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 8),
                   ],
                 );
               },
@@ -100,7 +124,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Fixtures'),
+        title: Text('Fixtures • ${widget.leagueName}'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -124,7 +148,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
             );
           }
 
-          final data = snapshot.data ?? [];
+          final data = snapshot.data ?? const <Map<String, dynamic>>[];
           if (data.isEmpty) {
             return const Center(child: Text('Nu există meciuri încă.'));
           }
@@ -147,11 +171,12 @@ class _FixturesScreenState extends State<FixturesScreen> {
                 final pAway = item['p_away'];
 
                 return ListTile(
-                  title: Text('$home  vs  $away'),
+                  title: Text('$home vs $away'),
                   subtitle: Text('Status: $status\nKickoff: $kickoff'),
                   isThreeLine: true,
                   trailing: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text('1 ${_fmtPct(pHome)}'),
                       Text('X ${_fmtPct(pDraw)}'),

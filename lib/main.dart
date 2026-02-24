@@ -1,32 +1,55 @@
 import 'package:flutter/material.dart';
 
-import 'api/api_client.dart';
+import 'services/api_client.dart';
 import 'services/sure_predict_service.dart';
-import 'state/favorites_store.dart';
+
 import 'state/leagues_store.dart';
+import 'state/favorites_store.dart';
+
 import 'ui/home_shell.dart';
 
 void main() {
-  runApp(const SurePredictApp());
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // ✅ Base URL backend (Render)
+  // Exemplu: https://sure-predict-backend.onrender.com
+  const baseUrl = 'https://sure-predict-backend.onrender.com';
+
+  final api = ApiClient(baseUrl: baseUrl);
+  final service = SurePredictService(api);
+
+  final leaguesStore = LeaguesStore(service);
+  final favoritesStore = FavoritesStore();
+
+  runApp(
+    SurePredictApp(
+      service: service,
+      leaguesStore: leaguesStore,
+      favoritesStore: favoritesStore,
+    ),
+  );
 }
 
 class SurePredictApp extends StatelessWidget {
-  const SurePredictApp({super.key});
+  final SurePredictService service;
+  final LeaguesStore leaguesStore;
+  final FavoritesStore favoritesStore;
+
+  const SurePredictApp({
+    super.key,
+    required this.service,
+    required this.leaguesStore,
+    required this.favoritesStore,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final api = ApiClient(baseUrl: 'https://sure-predict-backend.onrender.com');
-    final service = SurePredictService(api);
-
-    final leaguesStore = LeaguesStore(service);
-    final favoritesStore = FavoritesStore();
-
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Sure Predict',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
+        colorSchemeSeed: Colors.blue,
       ),
       home: HomeShell(
         service: service,

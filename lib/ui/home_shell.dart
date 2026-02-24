@@ -6,7 +6,7 @@ import '../state/leagues_store.dart';
 
 import 'favorites_screen.dart';
 import 'leagues_screen.dart';
-import 'fixtures_screen.dart';
+import 'fixtures_tab.dart';
 
 class HomeShell extends StatefulWidget {
   final SurePredictService service;
@@ -30,27 +30,21 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
-
-    // ce aveai deja:
     widget.favoritesStore.load();
-
-    // warm-up backend + loveste /health
     _warmUpBackend();
   }
 
   Future<void> _warmUpBackend() async {
     try {
       await widget.service.health();
-    } catch (_) {
-      // ignoram, doar "trezim" backend-ul
-    }
+    } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
       LeaguesScreen(store: widget.leaguesStore, service: widget.service),
-      FixturesScreen(service: widget.service), // <-- TAB NOU
+      FixturesTab(service: widget.service, leaguesStore: widget.leaguesStore),
       FavoritesScreen(store: widget.favoritesStore),
     ];
 

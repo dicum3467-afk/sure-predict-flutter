@@ -1,67 +1,26 @@
-import 'dart:convert';
+// lib/state/favorites_store.dart
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class FavoritesStore extends ChangeNotifier {
-  static const _key = 'favorites_v1';
+  final Set<String> _favoriteIds = {};
 
-  final List<Map<String, dynamic>> items = [];
+  Set<String> get ids => _favoriteIds;
 
-  bool isLoading = false;
-  String? error;
-
-  Future<void> load() async {
-    try {
-      isLoading = true;
-      error = null;
-      notifyListeners();
-
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_key);
-      items.clear();
-
-      if (raw != null && raw.trim().isNotEmpty) {
-        final decoded = jsonDecode(raw);
-        if (decoded is List) {
-          items.addAll(decoded.map((e) => Map<String, dynamic>.from(e as Map)));
-        }
-      }
-    } catch (e) {
-      error = e.toString();
-    } finally {
-      isLoading = false;
-      notifyListeners();
-    }
+  bool isFavorite(String fixtureId) {
+    return _favoriteIds.contains(fixtureId);
   }
 
-  Future<void> toggle(Map<String, dynamic> fixture) async {
-    final id = (fixture['provider_fixture_id'] ?? fixture['providerFixtureId'] ?? '').toString();
-    if (id.isEmpty) return;
-
-    final idx = items.indexWhere((e) {
-      final eid = (e['provider_fixture_id'] ?? e['providerFixtureId'] ?? '').toString();
-      return eid == id;
-    });
-
-    if (idx >= 0) {
-      items.removeAt(idx);
+  void toggle(String fixtureId) {
+    if (_favoriteIds.contains(fixtureId)) {
+      _favoriteIds.remove(fixtureId);
     } else {
-      items.add(fixture);
+      _favoriteIds.add(fixtureId);
     }
-
-    await _save();
     notifyListeners();
   }
 
-  bool isFavorite(String providerFixtureId) {
-    return items.any((e) {
-      final eid = (e['provider_fixture_id'] ?? e['providerFixtureId'] ?? '').toString();
-      return eid == providerFixtureId;
-    });
-  }
-
-  Future<void> _save() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, jsonEncode(items));
+  void clear() {
+    _favoriteIds.clear();
+    notifyListeners();
   }
 }

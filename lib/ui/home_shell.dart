@@ -6,6 +6,7 @@ import '../state/leagues_store.dart';
 
 import 'favorites_screen.dart';
 import 'leagues_screen.dart';
+import 'fixtures_screen.dart';
 
 class HomeShell extends StatefulWidget {
   final SurePredictService service;
@@ -33,16 +34,15 @@ class _HomeShellState extends State<HomeShell> {
     // ce aveai deja:
     widget.favoritesStore.load();
 
-    // ✅ PASUL 2: warm-up backend imediat după start
-    _warmUpBackend(); // ✅ PASUL 3: lovește /health
+    // warm-up backend + loveste /health
+    _warmUpBackend();
   }
 
   Future<void> _warmUpBackend() async {
     try {
       await widget.service.health();
     } catch (_) {
-      // Render poate fi "adormit" -> ignorăm aici.
-      // App-ul va funcționa când backend-ul se trezește.
+      // ignoram, doar "trezim" backend-ul
     }
   }
 
@@ -50,6 +50,7 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     final pages = <Widget>[
       LeaguesScreen(store: widget.leaguesStore, service: widget.service),
+      FixturesScreen(service: widget.service), // <-- TAB NOU
       FavoritesScreen(store: widget.favoritesStore),
     ];
 
@@ -60,6 +61,7 @@ class _HomeShellState extends State<HomeShell> {
         onDestinationSelected: (v) => setState(() => _index = v),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.sports_soccer), label: 'Leagues'),
+          NavigationDestination(icon: Icon(Icons.calendar_month), label: 'Fixtures'),
           NavigationDestination(icon: Icon(Icons.star), label: 'Favorites'),
         ],
       ),

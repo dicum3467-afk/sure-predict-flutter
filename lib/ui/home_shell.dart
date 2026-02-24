@@ -43,19 +43,14 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      // Tab 0: Fixtures (select leagues + open fixtures screen)
       FixturesTab(
         service: widget.service,
         leaguesStore: widget.leaguesStore,
       ),
-
-      // Tab 1: Leagues list (dacă vrei doar listare / debug)
       LeaguesScreen(
         service: widget.service,
         leaguesStore: widget.leaguesStore,
       ),
-
-      // Tab 2: Favorites
       FavoritesScreen(
         service: widget.service,
         favoritesStore: widget.favoritesStore,
@@ -67,10 +62,8 @@ class _HomeShellState extends State<HomeShell> {
         title: Text(_title),
         actions: [
           IconButton(
-            tooltip: 'Refresh leagues',
             icon: const Icon(Icons.refresh),
             onPressed: () async {
-              // refresh leagues oriunde ești
               await widget.leaguesStore.refresh();
               if (mounted) setState(() {});
             },

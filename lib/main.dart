@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core/api/api_client.dart';
+import 'core/ads/ad_service.dart';
 import 'services/sure_predict_service.dart';
 
 import 'state/leagues_store.dart';
@@ -9,8 +10,11 @@ import 'state/settings_store.dart';
 
 import 'ui/home_shell.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ✅ init ads
+  await AdService.instance.init();
 
   // 🔌 API client
   final apiClient = ApiClient(

@@ -19,18 +19,23 @@ class TopPicksScreen extends StatefulWidget {
 }
 
 class _TopPicksScreenState extends State<TopPicksScreen> {
-  // Date range default (poți schimba cum vrei)
-  String _from = '2026-02-01';
-  String _to = '2026-02-28';
-  String _runType = 'initial';
-
-  // Prag Top Picks
+  // ✅ Prag Top Picks
   double _threshold = 0.60; // 60%
 
-  // Live auto-refresh doar dacă există LIVE în rezultate
-  Timer? _timer;
+  // ✅ Status filter
+  // all | scheduled | live | finished
+  String _status = 'all';
 
-  // Pagination (load more)
+  // ✅ Mode: global vs top-per-league
+  bool _topPerLeague = false;
+  int _topNPerLeague = 10;
+
+  // ✅ Days: today / tomorrow
+  int _dayIndex = 0; // 0=today, 1=tomorrow
+
+  String _runType = 'initial';
+
+  // Pagination
   static const int _pageSize = 80;
   int _offset = 0;
   bool _loading = false;
@@ -41,6 +46,8 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
   final List<Map<String, dynamic>> _all = [];
   final Set<String> _seen = {};
   final ScrollController _scroll = ScrollController();
+
+  Timer? _timer;
 
   @override
   void initState() {
@@ -62,7 +69,27 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     super.dispose();
   }
 
-  // ---------- helpers ----------
+  // ---------- date helpers ----------
+  DateTime _today() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  String _fmtDate(DateTime d) {
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$m-$day';
+  }
+
+  ({String from, String to, String label}) _rangeForIndex(int idx) {
+    final base = _today();
+    final day = base.add(Duration(days: idx));
+    // range = aceeași zi (from=day, to=day)
+    return (from: _fmtDate(day), to: _fmtDate(day), label: idx == 0 ? 'Today' : 'Tomorrow');
+  }
+
+  // ---------- data helpers ----------
   double _num(dynamic v) {
     if (v == null) return 0.0;
     if (v is num) return v.toDouble();
@@ -86,6 +113,13 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
   bool _isLiveStatus(String s) {
     final x = s.toLowerCase().trim();
     return x == 'live' || x == 'inplay' || x == 'playing';
+  }
+
+  bool _statusMatches(Map<String, dynamic> it) {
+    if (_status == 'all') return true;
+    final st = (it['status'] ?? '').toString().toLowerCase().trim();
+    if (_status == 'live') return _isLiveStatus(st);
+    return st == _status;
   }
 
   DateTime _parseKickoff(Map<String, dynamic> it) {
@@ -142,8 +176,8 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     return cs.onSurfaceVariant;
   }
 
-  bool _hasLiveNowInTop(List<Map<String, dynamic>> top) {
-    for (final it in top) {
+  bool _hasLiveInList(List<Map<String, dynamic>> list) {
+    for (final it in list) {
       if (_isLiveStatus((it['status'] ?? '').toString())) return true;
     }
     return false;
@@ -153,7 +187,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     _timer?.cancel();
     _timer = null;
 
-    if (!_hasLiveNowInTop(top)) return;
+    if (!_hasLiveInList(top)) return;
 
     _timer = Timer.periodic(const Duration(seconds: 30), (_) async {
       if (!mounted) return;
@@ -163,6 +197,8 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
   // ---------- loading ----------
   Future<void> _loadInitial() async {
+    final r = _rangeForIndex(_dayIndex);
+
     setState(() {
       _loading = true;
       _loadingMore = false;
@@ -174,14 +210,14 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     });
 
     try {
-      // leagueIds: [] => ALL leagues
       final page = await widget.service.getFixtures(
-        leagueIds: const [],
-        from: _from,
-        to: _to,
+        leagueIds: const [], // ✅ ALL leagues
+        from: r.from,
+        to: r.to,
         limit: _pageSize,
         offset: 0,
         runType: _runType,
+        // NU trimitem status aici (filtrăm local) ca să nu pierdem LIVE mixed
       );
 
       for (final it in page) {
@@ -203,6 +239,8 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
   Future<void> _loadMore() async {
     if (_loading || _loadingMore || !_hasMore) return;
 
+    final r = _rangeForIndex(_dayIndex);
+
     setState(() {
       _loadingMore = true;
       _error = null;
@@ -211,8 +249,8 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     try {
       final page = await widget.service.getFixtures(
         leagueIds: const [],
-        from: _from,
-        to: _to,
+        from: r.from,
+        to: r.to,
         limit: _pageSize,
         offset: _offset,
         runType: _runType,
@@ -235,13 +273,14 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
   }
 
   Future<void> _refreshSoft() async {
-    // refresh soft: reîncarcă primele N (max 160)
+    final r = _rangeForIndex(_dayIndex);
     final want = _all.length.clamp(80, 160);
+
     try {
       final page = await widget.service.getFixtures(
         leagueIds: const [],
-        from: _from,
-        to: _to,
+        from: r.from,
+        to: r.to,
         limit: want,
         offset: 0,
         runType: _runType,
@@ -258,19 +297,79 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
         _offset = page.length;
         _hasMore = page.length == want;
       });
-    } catch (_) {
-      // ignorăm soft errors
-    }
+    } catch (_) {}
   }
 
   Future<void> _refreshHard() async => _loadInitial();
+
+  // ---------- build Top Picks ----------
+  List<Map<String, dynamic>> _buildTopPicks() {
+    // 1) filter status
+    final filtered = _all.where(_statusMatches).toList();
+
+    // 2) compute best + threshold filter
+    final List<Map<String, dynamic>> picks = [];
+    for (final it in filtered) {
+      final best = _bestPick(it);
+      if (best.p >= _threshold) {
+        final copy = Map<String, dynamic>.from(it);
+        copy['_best_label'] = best.label;
+        copy['_best_p'] = best.p;
+        picks.add(copy);
+      }
+    }
+
+    // 3) sort: LIVE first, best desc, kickoff asc
+    picks.sort((a, b) {
+      final ra = _statusRank(a);
+      final rb = _statusRank(b);
+      if (ra != rb) return ra.compareTo(rb);
+
+      final pa = (a['_best_p'] as double?) ?? 0.0;
+      final pb = (b['_best_p'] as double?) ?? 0.0;
+      if (pa != pb) return pb.compareTo(pa);
+
+      return _parseKickoff(a).compareTo(_parseKickoff(b));
+    });
+
+    // 4) option: top per league
+    if (_topPerLeague) {
+      final out = <Map<String, dynamic>>[];
+      final byLeague = <String, List<Map<String, dynamic>>>{};
+
+      for (final it in picks) {
+        final leagueId = (it['league_id'] ?? '').toString();
+        byLeague.putIfAbsent(leagueId, () => []).add(it);
+      }
+
+      // ia primele N din fiecare ligă, păstrând sortarea internă
+      byLeague.forEach((_, list) {
+        out.addAll(list.take(_topNPerLeague));
+      });
+
+      // resort global după aceleași reguli
+      out.sort((a, b) {
+        final ra = _statusRank(a);
+        final rb = _statusRank(b);
+        if (ra != rb) return ra.compareTo(rb);
+
+        final pa = (a['_best_p'] as double?) ?? 0.0;
+        final pb = (b['_best_p'] as double?) ?? 0.0;
+        if (pa != pb) return pb.compareTo(pa);
+
+        return _parseKickoff(a).compareTo(_parseKickoff(b));
+      });
+
+      return out;
+    }
+
+    return picks;
+  }
 
   // ---------- prediction sheet ----------
   void _openPrediction(BuildContext context, Map<String, dynamic> item) {
     final providerId = (item['provider_fixture_id'] ?? '').toString();
     if (providerId.isEmpty) return;
-
-    final best = _bestPick(item);
 
     showModalBottomSheet(
       context: context,
@@ -283,19 +382,19 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
             future: widget.service.getPrediction(providerFixtureId: providerId),
             builder: (context, snap) {
               if (snap.connectionState == ConnectionState.waiting) {
-                return const SizedBox(
-                  height: 220,
-                  child: Center(child: CircularProgressIndicator()),
-                );
+                return const SizedBox(height: 220, child: Center(child: CircularProgressIndicator()));
               }
               if (snap.hasError) {
-                return SizedBox(
-                  height: 220,
-                  child: Center(child: Text('Eroare: ${snap.error}')),
-                );
+                return SizedBox(height: 220, child: Center(child: Text('Eroare: ${snap.error}')));
               }
 
               final pred = snap.data ?? <String, dynamic>{};
+
+              String fmt(dynamic v) {
+                final n = v is num ? v.toDouble() : double.tryParse(v.toString());
+                if (n == null) return '-';
+                return '${(n * 100).toStringAsFixed(0)}%';
+              }
 
               final pHome = pred['p_home'] ?? item['p_home'];
               final pDraw = pred['p_draw'] ?? item['p_draw'];
@@ -306,11 +405,8 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
               final home = (item['home'] ?? '').toString();
               final away = (item['away'] ?? '').toString();
 
-              String fmt(dynamic v) {
-                final n = v is num ? v.toDouble() : double.tryParse(v.toString());
-                if (n == null) return '-';
-                return '${(n * 100).toStringAsFixed(0)}%';
-              }
+              final bestLabel = (item['_best_label'] ?? '').toString();
+              final bestP = (item['_best_p'] is double) ? (item['_best_p'] as double) : _num(item['_best_p']);
 
               return Column(
                 mainAxisSize: MainAxisSize.min,
@@ -318,20 +414,21 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                 children: [
                   Text('$home vs $away', style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: _confidenceBg(context, best.p),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      'BEST ${best.label} ${_fmtPct(best.p)}',
-                      style: TextStyle(
-                        color: _confidenceFg(context, best.p),
-                        fontWeight: FontWeight.w800,
+                  if (bestLabel.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: _confidenceBg(context, bestP),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        'BEST $bestLabel ${_fmtPct(bestP)}',
+                        style: TextStyle(
+                          color: _confidenceFg(context, bestP),
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
-                  ),
                   const SizedBox(height: 14),
                   _PredRow(label: '1 (Home)', value: fmt(pHome)),
                   _PredRow(label: 'X (Draw)', value: fmt(pDraw)),
@@ -349,45 +446,13 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     );
   }
 
-  // ---------- build Top Picks ----------
-  List<Map<String, dynamic>> _buildTopPicks() {
-    final List<Map<String, dynamic>> picks = [];
-
-    for (final it in _all) {
-      final best = _bestPick(it);
-      if (best.p >= _threshold) {
-        // adăugăm best în map ca să nu recalculăm în UI
-        final copy = Map<String, dynamic>.from(it);
-        copy['_best_label'] = best.label;
-        copy['_best_p'] = best.p;
-        picks.add(copy);
-      }
-    }
-
-    // sort: LIVE first, apoi best desc, apoi kickoff
-    picks.sort((a, b) {
-      final ra = _statusRank(a);
-      final rb = _statusRank(b);
-      if (ra != rb) return ra.compareTo(rb);
-
-      final pa = (a['_best_p'] as double?) ?? 0.0;
-      final pb = (b['_best_p'] as double?) ?? 0.0;
-      if (pa != pb) return pb.compareTo(pa);
-
-      return _parseKickoff(a).compareTo(_parseKickoff(b));
-    });
-
-    return picks;
-  }
-
   @override
   Widget build(BuildContext context) {
+    final r = _rangeForIndex(_dayIndex);
     final top = _buildTopPicks();
 
-    // pornește/oprește auto refresh dacă sunt LIVE în top
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _startOrStopTimer(top);
-    });
+    // live timer based on TOP list
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startOrStopTimer(top));
 
     return AnimatedBuilder(
       animation: widget.favoritesStore,
@@ -405,10 +470,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                 children: [
                   Text('Eroare: $_error'),
                   const SizedBox(height: 12),
-                  FilledButton(
-                    onPressed: _refreshHard,
-                    child: const Text('Retry'),
-                  ),
+                  FilledButton(onPressed: _refreshHard, child: const Text('Retry')),
                 ],
               ),
             ),
@@ -417,7 +479,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
         return Column(
           children: [
-            // Header controls
+            // Header
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: Column(
@@ -426,19 +488,90 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(
-                          'Top Picks',
-                          style: Theme.of(context).textTheme.titleLarge,
+                        child: Text('Top Picks • ${r.label}', style: Theme.of(context).textTheme.titleLarge),
+                      ),
+                      IconButton(icon: const Icon(Icons.refresh), onPressed: _refreshHard),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Today/Tomorrow switch
+                  SegmentedButton<int>(
+                    segments: const [
+                      ButtonSegment(value: 0, label: Text('Today')),
+                      ButtonSegment(value: 1, label: Text('Tomorrow')),
+                    ],
+                    selected: {_dayIndex},
+                    onSelectionChanged: (s) {
+                      setState(() => _dayIndex = s.first);
+                      _loadInitial();
+                    },
+                  ),
+
+                  const SizedBox(height: 10),
+
+                  // Status filter + top-per-league
+                  Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: _status,
+                          decoration: const InputDecoration(
+                            labelText: 'Status',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 'all', child: Text('All')),
+                            DropdownMenuItem(value: 'scheduled', child: Text('Scheduled')),
+                            DropdownMenuItem(value: 'live', child: Text('Live')),
+                            DropdownMenuItem(value: 'finished', child: Text('Finished')),
+                          ],
+                          onChanged: (v) => setState(() => _status = v ?? 'all'),
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.refresh),
-                        onPressed: _refreshHard,
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Top/league'),
+                          value: _topPerLeague,
+                          onChanged: (v) => setState(() => _topPerLeague = v),
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
-                  Text('Prag: ${(100 * _threshold).toStringAsFixed(0)}%  •  Rezultate: ${top.length}'),
+
+                  if (_topPerLeague)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Row(
+                        children: [
+                          const Text('N:'),
+                          const SizedBox(width: 10),
+                          DropdownButton<int>(
+                            value: _topNPerLeague,
+                            items: const [
+                              DropdownMenuItem(value: 5, child: Text('5')),
+                              DropdownMenuItem(value: 10, child: Text('10')),
+                              DropdownMenuItem(value: 15, child: Text('15')),
+                            ],
+                            onChanged: (v) => setState(() => _topNPerLeague = v ?? 10),
+                          ),
+                          const Spacer(),
+                          Text('Fixtures: ${_all.length} • Picks: ${top.length}'),
+                        ],
+                      ),
+                    )
+                  else
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text('Fixtures: ${_all.length} • Picks: ${top.length}'),
+                    ),
+
+                  const SizedBox(height: 8),
+
+                  // Threshold slider
+                  Text('Prag: ${(100 * _threshold).toStringAsFixed(0)}%'),
                   Slider(
                     value: _threshold,
                     min: 0.55,
@@ -451,6 +584,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
               ),
             ),
 
+            // List
             Expanded(
               child: RefreshIndicator(
                 onRefresh: _refreshHard,
@@ -478,6 +612,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                     }
 
                     final it = top[idx];
+
                     final home = (it['home'] ?? '').toString();
                     final away = (it['away'] ?? '').toString();
                     final status = (it['status'] ?? '').toString();
@@ -485,7 +620,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                     final leagueId = (it['league_id'] ?? '').toString();
 
                     final bestLabel = (it['_best_label'] ?? '—').toString();
-                    final bestP = (it['_best_p'] as double?) ?? 0.0;
+                    final bestP = (it['_best_p'] is double) ? (it['_best_p'] as double) : _num(it['_best_p']);
 
                     final fav = widget.favoritesStore.isFavorite(it);
 

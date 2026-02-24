@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../services/sure_predict_service.dart';
 import '../state/leagues_store.dart';
 import '../state/favorites_store.dart';
-
+import '../state/settings_store.dart';
+import 'settings_screen.dart';
 import 'top_picks_screen.dart';
 import 'fixtures_tab.dart';
 import 'leagues_screen.dart';

@@ -25,39 +25,29 @@ class _FixturesTabState extends State<FixturesTab> {
   void initState() {
     super.initState();
 
-    // Dacă store-ul tău are deja ligi, alegem prima.
-    // Dacă nu, lasă așa și vei selecta manual din dropdown.
-    _tryPickFirstLeague();
+    if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
+      widget.leaguesStore.load().then((_) => _tryPickFirstLeague());
+    } else {
+      _tryPickFirstLeague();
+    }
   }
 
   void _tryPickFirstLeague() {
-    try {
-      final items = (widget.leaguesStore as dynamic).items as List;
-      if (items.isNotEmpty) {
-        final first = items.first as Map<String, dynamic>;
-        setState(() {
-          _leagueId = first['id']?.toString();
-          _leagueName = first['name']?.toString();
-        });
-      }
-    } catch (_) {
-      // dacă store-ul tău nu are "items", nu crăpăm
+    final items = widget.leaguesStore.items;
+    if (items.isNotEmpty) {
+      final first = items.first;
+      setState(() {
+        _leagueId = first['id']?.toString();
+        _leagueName = first['name']?.toString();
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // dacă nu avem încă league selectat -> arătăm selector
-    if (_leagueId == null || _leagueName == null) {
-      // încercăm să luăm ligi din store (dacă există)
-      List<Map<String, dynamic>> leagues = [];
-      try {
-        final items = (widget.leaguesStore as dynamic).items as List;
-        leagues = items
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-      } catch (_) {}
+    final leagues = widget.leaguesStore.items;
 
+    if (_leagueId == null || _leagueName == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('Fixtures')),
         body: Padding(
@@ -67,6 +57,7 @@ class _FixturesTabState extends State<FixturesTab> {
             children: [
               const Text('Alege o ligă:'),
               const SizedBox(height: 12),
+
               DropdownButtonFormField<String>(
                 value: _leagueId,
                 items: leagues
@@ -87,18 +78,25 @@ class _FixturesTabState extends State<FixturesTab> {
                 },
                 hint: const Text('Selectează...'),
               ),
+
               const SizedBox(height: 16),
-              const Text(
-                'Dacă dropdown-ul e gol, înseamnă că LeaguesStore nu expune "items" '
-                'sau nu încarcă ligile aici. Atunci facem tab-ul Fixtures să folosească un store separat.',
-              ),
+              if (widget.leaguesStore.isLoading)
+                const Center(child: CircularProgressIndicator()),
+
+              if (widget.leaguesStore.error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    widget.leaguesStore.error!,
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                ),
             ],
           ),
         ),
       );
     }
 
-    // avem league -> afișăm ecranul tău existent
     return FixturesScreen(
       leagueId: _leagueId!,
       leagueName: _leagueName!,

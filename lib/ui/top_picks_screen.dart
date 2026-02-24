@@ -3,15 +3,18 @@ import 'package:flutter/material.dart';
 
 import '../services/sure_predict_service.dart';
 import '../state/favorites_store.dart';
+import '../state/settings_store.dart';
 
 class TopPicksScreen extends StatefulWidget {
   final SurePredictService service;
   final FavoritesStore favoritesStore;
+  final SettingsStore settingsStore;
 
   const TopPicksScreen({
     super.key,
     required this.service,
     required this.favoritesStore,
+    required this.settingsStore,
   });
 
   @override
@@ -19,13 +22,12 @@ class TopPicksScreen extends StatefulWidget {
 }
 
 class _TopPicksScreenState extends State<TopPicksScreen> {
-  double _threshold = 0.60;
+  // 🔗 vin din SettingsStore
+  late double _threshold;
+  late String _status;
+  late bool _topPerLeague;
 
-  String _status = 'all'; // all|scheduled|live|finished
-
-  bool _topPerLeague = false;
   int _topNPerLeague = 10;
-
   int _dayIndex = 0; // 0=today, 1=tomorrow
   String _runType = 'initial';
 
@@ -47,7 +49,17 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
   @override
   void initState() {
     super.initState();
+
     widget.favoritesStore.load();
+
+    // ✅ inițializează din SettingsStore
+    _threshold = widget.settingsStore.threshold;
+    _status = widget.settingsStore.status;
+    _topPerLeague = widget.settingsStore.topPerLeague;
+
+    // dacă settings se încarcă async și se schimbă după init:
+    widget.settingsStore.addListener(_onSettingsChanged);
+
     _loadInitial();
 
     _scroll.addListener(() {
@@ -59,9 +71,24 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
   @override
   void dispose() {
+    widget.settingsStore.removeListener(_onSettingsChanged);
     _timer?.cancel();
     _scroll.dispose();
     super.dispose();
+  }
+
+  void _onSettingsChanged() {
+    // dacă user schimbă din Settings tab, reflectă și aici
+    final s = widget.settingsStore;
+
+    final changed = (_threshold != s.threshold) || (_status != s.status) || (_topPerLeague != s.topPerLeague);
+    if (!changed) return;
+
+    setState(() {
+      _threshold = s.threshold;
+      _status = s.status;
+      _topPerLeague = s.topPerLeague;
+    });
   }
 
   DateTime _today() {
@@ -184,7 +211,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     _timer = Timer.periodic(const Duration(seconds: 30), (_) async {
       if (!mounted) return;
       await _refreshSoft();
-      await _refreshCacheInfo(); // update badge
+      await _refreshCacheInfo();
       setState(() {});
     });
   }
@@ -306,9 +333,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     } catch (_) {}
   }
 
-  Future<void> _refreshHard() async {
-    await _loadInitial();
-  }
+  Future<void> _refreshHard() async => _loadInitial();
 
   List<Map<String, dynamic>> _buildTopPicks() {
     final filtered = _all.where(_statusMatches).toList();
@@ -483,7 +508,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _startOrStopTimer(top));
 
     return AnimatedBuilder(
-      animation: widget.favoritesStore,
+      animation: Listenable.merge([widget.favoritesStore, widget.settingsStore]),
       builder: (context, _) {
         if (_loading) return const Center(child: CircularProgressIndicator());
 
@@ -558,7 +583,11 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                             DropdownMenuItem(value: 'live', child: Text('Live')),
                             DropdownMenuItem(value: 'finished', child: Text('Finished')),
                           ],
-                          onChanged: (v) => setState(() => _status = v ?? 'all'),
+                          onChanged: (v) async {
+                            final nv = v ?? 'all';
+                            setState(() => _status = nv);
+                            await widget.settingsStore.setStatus(nv);
+                          },
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -567,7 +596,10 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                           contentPadding: EdgeInsets.zero,
                           title: const Text('Top/league'),
                           value: _topPerLeague,
-                          onChanged: (v) => setState(() => _topPerLeague = v),
+                          onChanged: (v) async {
+                            setState(() => _topPerLeague = v);
+                            await widget.settingsStore.setTopPerLeague(v);
+                          },
                         ),
                       ),
                     ],
@@ -609,7 +641,10 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                     max: 0.80,
                     divisions: 25,
                     label: '${(100 * _threshold).toStringAsFixed(0)}%',
-                    onChanged: (v) => setState(() => _threshold = v),
+                    onChanged: (v) async {
+                      setState(() => _threshold = v);
+                      await widget.settingsStore.setThreshold(v);
+                    },
                   ),
                 ],
               ),

@@ -4,9 +4,9 @@ import '../services/sure_predict_service.dart';
 import '../state/leagues_store.dart';
 import '../state/favorites_store.dart';
 
-import 'favorites_screen.dart';
-import 'leagues_screen.dart';
 import 'fixtures_tab.dart';
+import 'leagues_screen.dart';
+import 'favorites_screen.dart';
 
 class HomeShell extends StatefulWidget {
   final SurePredictService service;
@@ -27,47 +27,71 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
 
-  @override
-  void initState() {
-    super.initState();
-
-    // load favorites
-    widget.favoritesStore.load();
-
-    // warm-up backend (nu crăpă dacă e down)
-    _warmUpBackend();
-  }
-
-  Future<void> _warmUpBackend() async {
-    try {
-      await widget.service.health();
-    } catch (_) {}
+  String get _title {
+    switch (_index) {
+      case 0:
+        return 'Fixtures';
+      case 1:
+        return 'Leagues';
+      case 2:
+        return 'Favorites';
+      default:
+        return 'Sure Predict';
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      LeaguesScreen(store: widget.leaguesStore, service: widget.service),
-      FixturesTab(service: widget.service, leaguesStore: widget.leaguesStore),
-      FavoritesScreen(store: widget.favoritesStore),
+      // Tab 0: Fixtures (select leagues + open fixtures screen)
+      FixturesTab(
+        service: widget.service,
+        leaguesStore: widget.leaguesStore,
+      ),
+
+      // Tab 1: Leagues list (dacă vrei doar listare / debug)
+      LeaguesScreen(
+        service: widget.service,
+        leaguesStore: widget.leaguesStore,
+      ),
+
+      // Tab 2: Favorites
+      FavoritesScreen(
+        service: widget.service,
+        favoritesStore: widget.favoritesStore,
+      ),
     ];
 
     return Scaffold(
+      appBar: AppBar(
+        title: Text(_title),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh leagues',
+            icon: const Icon(Icons.refresh),
+            onPressed: () async {
+              // refresh leagues oriunde ești
+              await widget.leaguesStore.refresh();
+              if (mounted) setState(() {});
+            },
+          ),
+        ],
+      ),
       body: IndexedStack(
         index: _index,
         children: pages,
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (v) => setState(() => _index = v),
+        onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.sports_soccer),
-            label: 'Leagues',
+            label: 'Fixtures',
           ),
           NavigationDestination(
-            icon: Icon(Icons.calendar_month),
-            label: 'Fixtures',
+            icon: Icon(Icons.public),
+            label: 'Leagues',
           ),
           NavigationDestination(
             icon: Icon(Icons.star),

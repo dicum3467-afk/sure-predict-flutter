@@ -41,13 +41,22 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    widget.favoritesStore.load();
+    if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
+      widget.leaguesStore.load();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
       FixturesTab(
-  service: widget.service,
-  leaguesStore: widget.leaguesStore,
-  favoritesStore: widget.favoritesStore,
-),
+        service: widget.service,
+        leaguesStore: widget.leaguesStore,
+        favoritesStore: widget.favoritesStore,
+      ),
       LeaguesScreen(
         service: widget.service,
         leaguesStore: widget.leaguesStore,
@@ -71,26 +80,14 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _index,
-        children: pages,
-      ),
+      body: IndexedStack(index: _index, children: pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.sports_soccer),
-            label: 'Fixtures',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.public),
-            label: 'Leagues',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.star),
-            label: 'Favorites',
-          ),
+          NavigationDestination(icon: Icon(Icons.sports_soccer), label: 'Fixtures'),
+          NavigationDestination(icon: Icon(Icons.public), label: 'Leagues'),
+          NavigationDestination(icon: Icon(Icons.star), label: 'Favorites'),
         ],
       ),
     );

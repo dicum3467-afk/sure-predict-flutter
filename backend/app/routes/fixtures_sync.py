@@ -224,16 +224,36 @@ def _sync_one_league(league_id: str, season: int, run_type: str, days_ahead: Opt
     """
     Returnează (count, error_message)
     """
+    # 0) ia provider_league_id (numeric) din DB pe baza UUID-ului intern
+    conn = None
     try:
-        # fetch de la provider (API-Football etc.)
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT provider_league_id FROM leagues WHERE id = %s LIMIT 1", (league_id,))
+        row = cur.fetchone()
+        if not row or not row.get("provider_league_id"):
+            return 0, f"league not found or missing provider_league_id for league_id={league_id}"
+        provider_league_id = str(row["provider_league_id"]).strip()
+    except Exception as e:
+        return 0, f"cannot read provider_league_id: {e}"
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+    # 1) Fetch de la provider (API-Football) folosind provider_league_id
+    try:
         fixtures: List[Dict[str, Any]] = fetch_fixtures_by_league(
-            league_id=league_id,
+            league_id=provider_league_id,   # <-- ACUM e corect
             season=season,
             days_ahead=days_ahead,
         )
     except Exception as e:
         return 0, f"fetch failed: {e}"
 
+    # 2) upsert în DB
     conn = None
     try:
         conn = get_conn()
@@ -242,7 +262,7 @@ def _sync_one_league(league_id: str, season: int, run_type: str, days_ahead: Opt
 
         n = 0
         for fx in fixtures or []:
-            _upsert_fixture(cur, fx, league_id=league_id, run_type=run_type)
+            _upsert_fixture(cur, fx, league_id=league_id, run_type=run_type)  # league_id rămâne UUID intern!
             n += 1
 
         conn.commit()

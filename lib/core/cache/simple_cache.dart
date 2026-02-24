@@ -9,6 +9,24 @@ class SimpleCache {
   String _kData(String key) => 'cache:data:$key';
   String _kTs(String key) => 'cache:ts:$key';
 
+  Future<int?> getLastUpdatedMs(String key) async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getInt(_kTs(key));
+  }
+
+  Future<int?> getAgeSeconds(String key) async {
+    final ts = await getLastUpdatedMs(key);
+    if (ts == null) return null;
+    final ageMs = DateTime.now().millisecondsSinceEpoch - ts;
+    return (ageMs / 1000).floor();
+  }
+
+  Future<bool> isFresh(String key) async {
+    final age = await getAgeSeconds(key);
+    if (age == null) return false;
+    return age <= ttl.inSeconds;
+  }
+
   Future<dynamic> get(String key) async {
     final sp = await SharedPreferences.getInstance();
     final ts = sp.getInt(_kTs(key));
@@ -46,34 +64,24 @@ class SimpleCache {
     await sp.setInt(_kTs(key), ts);
   }
 
-  /// ✅ Stale-While-Revalidate:
-  /// - returnează cache valid dacă există
-  /// - altfel returnează cache stale dacă există
-  /// - pornește în fundal fetcher() și updatează cache-ul
-  /// - dacă nu există nimic în cache, așteaptă fetcher()
   Future<T> getSWR<T>({
     required String key,
     required Future<T> Function() fetcher,
   }) async {
-    // 1) valid cache
     final fresh = await get(key);
     if (fresh != null) {
-      // revalidate in background
       // ignore: unawaited_futures
       _revalidate<T>(key: key, fetcher: fetcher);
       return fresh as T;
     }
 
-    // 2) stale cache
     final stale = await getStale(key);
     if (stale != null) {
-      // revalidate in background
       // ignore: unawaited_futures
       _revalidate<T>(key: key, fetcher: fetcher);
       return stale as T;
     }
 
-    // 3) no cache -> must fetch
     final data = await fetcher();
     await set(key, data);
     return data;
@@ -87,7 +95,7 @@ class SimpleCache {
       final data = await fetcher();
       await set(key, data);
     } catch (_) {
-      // ignore background errors
+      // ignore
     }
   }
 

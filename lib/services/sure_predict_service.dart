@@ -3,10 +3,16 @@ import 'dart:convert';
 import '../api/api_client.dart';
 import '../core/cache/simple_cache.dart';
 
+class CacheInfo {
+  final int? ageSeconds;
+  final bool isFresh;
+
+  const CacheInfo({required this.ageSeconds, required this.isFresh});
+}
+
 class SurePredictService {
   final ApiClient _api;
 
-  // ✅ cache 15 min + SWR
   final SimpleCache _cache = const SimpleCache(ttl: Duration(minutes: 15));
 
   SurePredictService(this._api);
@@ -38,6 +44,33 @@ class SurePredictService {
     return '$path?${_stableEncodeQuery(query)}';
   }
 
+  // Exposed cache info (pentru badge UI)
+  Future<CacheInfo> fixturesCacheInfo({
+    required List<String> leagueIds,
+    required String from,
+    required String to,
+    int limit = 50,
+    int offset = 0,
+    String runType = 'initial',
+    String? status,
+  }) async {
+    final query = <String, dynamic>{
+      if (leagueIds.isNotEmpty) 'league_ids': leagueIds,
+      'date_from': from,
+      'date_to': to,
+      'limit': limit,
+      'offset': offset,
+      'run_type': runType,
+      if (status != null && status.trim().isNotEmpty) 'status': status.trim(),
+    };
+
+    final key = _cacheKey('/fixtures', query);
+    final age = await _cache.getAgeSeconds(key);
+    final fresh = await _cache.isFresh(key);
+
+    return CacheInfo(ageSeconds: age, isFresh: fresh);
+  }
+
   // ---------- leagues (SWR cached) ----------
   Future<List<Map<String, dynamic>>> getLeagues() async {
     final key = _cacheKey('/leagues', const {});
@@ -54,7 +87,6 @@ class SurePredictService {
   }
 
   // ---------- fixtures (SWR cached) ----------
-  /// leagueIds: dacă e listă goală => ALL leagues (nu trimitem league_ids)
   Future<List<Map<String, dynamic>>> getFixtures({
     required List<String> leagueIds,
     required String from,

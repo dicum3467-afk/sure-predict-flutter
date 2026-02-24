@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 
+import '../core/ads/ad_service.dart';
 import '../services/sure_predict_service.dart';
 import '../state/favorites_store.dart';
 import '../state/settings_store.dart';
@@ -52,12 +53,10 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
     widget.favoritesStore.load();
 
-    // ✅ inițializează din SettingsStore
     _threshold = widget.settingsStore.threshold;
     _status = widget.settingsStore.status;
     _topPerLeague = widget.settingsStore.topPerLeague;
 
-    // dacă settings se încarcă async și se schimbă după init:
     widget.settingsStore.addListener(_onSettingsChanged);
 
     _loadInitial();
@@ -78,9 +77,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
   }
 
   void _onSettingsChanged() {
-    // dacă user schimbă din Settings tab, reflectă și aici
     final s = widget.settingsStore;
-
     final changed = (_threshold != s.threshold) || (_status != s.status) || (_topPerLeague != s.topPerLeague);
     if (!changed) return;
 
@@ -421,7 +418,10 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     return info.isFresh ? cs.onPrimaryContainer : cs.onSurfaceVariant;
   }
 
+  // ✅ MONEY: interstitial la prediction (la fiecare 3 deschideri, în AdService)
   void _openPrediction(BuildContext context, Map<String, dynamic> item) {
+    AdService.instance.maybeShowPredictionAd(); // 💰
+
     final providerId = (item['provider_fixture_id'] ?? '').toString();
     if (providerId.isEmpty) return;
 

@@ -31,7 +31,7 @@ class SurePredictService {
     final data = await _api.getJson(
       '/fixtures',
       query: {
-        'league_ids': leagueId.join(',') // ✅ IMPORTANT (plural + list)
+        'league_ids': leagueId, //LIST, nu STRING
         'from': from,
         'to': to,
         'limit': limit,

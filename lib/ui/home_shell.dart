@@ -44,9 +44,10 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     final pages = <Widget>[
       FixturesTab(
-        service: widget.service,
-        leaguesStore: widget.leaguesStore,
-      ),
+  service: widget.service,
+  leaguesStore: widget.leaguesStore,
+  favoritesStore: widget.favoritesStore,
+),
       LeaguesScreen(
         service: widget.service,
         leaguesStore: widget.leaguesStore,

@@ -26,7 +26,6 @@ class SimpleCache {
     }
   }
 
-  /// Ia date chiar dacă sunt expirate (pentru fallback când API cade)
   Future<dynamic> getStale(String key) async {
     final sp = await SharedPreferences.getInstance();
     final raw = sp.getString(_kData(key));
@@ -45,6 +44,51 @@ class SimpleCache {
     final raw = jsonEncode(data);
     await sp.setString(_kData(key), raw);
     await sp.setInt(_kTs(key), ts);
+  }
+
+  /// ✅ Stale-While-Revalidate:
+  /// - returnează cache valid dacă există
+  /// - altfel returnează cache stale dacă există
+  /// - pornește în fundal fetcher() și updatează cache-ul
+  /// - dacă nu există nimic în cache, așteaptă fetcher()
+  Future<T> getSWR<T>({
+    required String key,
+    required Future<T> Function() fetcher,
+  }) async {
+    // 1) valid cache
+    final fresh = await get(key);
+    if (fresh != null) {
+      // revalidate in background
+      // ignore: unawaited_futures
+      _revalidate<T>(key: key, fetcher: fetcher);
+      return fresh as T;
+    }
+
+    // 2) stale cache
+    final stale = await getStale(key);
+    if (stale != null) {
+      // revalidate in background
+      // ignore: unawaited_futures
+      _revalidate<T>(key: key, fetcher: fetcher);
+      return stale as T;
+    }
+
+    // 3) no cache -> must fetch
+    final data = await fetcher();
+    await set(key, data);
+    return data;
+  }
+
+  Future<void> _revalidate<T>({
+    required String key,
+    required Future<T> Function() fetcher,
+  }) async {
+    try {
+      final data = await fetcher();
+      await set(key, data);
+    } catch (_) {
+      // ignore background errors
+    }
   }
 
   Future<void> remove(String key) async {

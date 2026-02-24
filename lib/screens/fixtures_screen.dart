@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
+
 import '../services/sure_predict_service.dart';
 
 class FixturesScreen extends StatefulWidget {
   final SurePredictService service;
   final List<String> leagueIds;
 
-  // ⭐ id -> name
+  /// id -> name (din tab)
   final Map<String, String> leagueNamesById;
 
   final String title;
@@ -25,6 +26,7 @@ class FixturesScreen extends StatefulWidget {
 class _FixturesScreenState extends State<FixturesScreen> {
   late Future<List<Map<String, dynamic>>> _future;
 
+  // default range / params
   String _from = '2026-02-01';
   String _to = '2026-02-28';
   String _runType = 'initial';
@@ -58,6 +60,19 @@ class _FixturesScreenState extends State<FixturesScreen> {
     return '${(n * 100).toStringAsFixed(0)}%';
   }
 
+  double _confidence(Map<String, dynamic> m) {
+    double val(dynamic v) {
+      if (v == null) return 0;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString()) ?? 0;
+    }
+
+    final h = val(m['p_home']);
+    final d = val(m['p_draw']);
+    final a = val(m['p_away']);
+    return [h, d, a].reduce((x, y) => x > y ? x : y);
+  }
+
   void _openPrediction(BuildContext context, Map<String, dynamic> item) {
     final providerId = (item['provider_fixture_id'] ?? '').toString();
     if (providerId.isEmpty) return;
@@ -66,48 +81,60 @@ class _FixturesScreenState extends State<FixturesScreen> {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: FutureBuilder<Map<String, dynamic>>(
-            future: widget.service.getPrediction(providerFixtureId: providerId),
-            builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return const SizedBox(
-                  height: 200,
-                  child: Center(child: CircularProgressIndicator()),
-                );
-              }
-              if (snap.hasError) {
-                return SizedBox(
-                  height: 220,
-                  child: Center(child: Text('Eroare: ${snap.error}')),
-                );
-              }
+      builder: (_) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: FutureBuilder<Map<String, dynamic>>(
+              future: widget.service.getPrediction(providerFixtureId: providerId),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const SizedBox(
+                    height: 200,
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
 
-              final pred = snap.data ?? {};
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${item['home']} vs ${item['away']}',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 12),
-                  _PredRow(label: '1 (Home)', value: _fmtPct(pred['p_home'])),
-                  _PredRow(label: 'X (Draw)', value: _fmtPct(pred['p_draw'])),
-                  _PredRow(label: '2 (Away)', value: _fmtPct(pred['p_away'])),
-                  const SizedBox(height: 24),
-                  _PredRow(label: 'Over 2.5', value: _fmtPct(pred['p_over25'])),
-                  _PredRow(label: 'Under 2.5', value: _fmtPct(pred['p_under25'])),
-                  const SizedBox(height: 16),
-                ],
-              );
-            },
+                if (snap.hasError) {
+                  return SizedBox(
+                    height: 220,
+                    child: Center(
+                      child: Text('Eroare: ${snap.error}'),
+                    ),
+                  );
+                }
+
+                final pred = snap.data ?? {};
+
+                final pHome = pred['p_home'] ?? item['p_home'];
+                final pDraw = pred['p_draw'] ?? item['p_draw'];
+                final pAway = pred['p_away'] ?? item['p_away'];
+                final pOver = pred['p_over25'] ?? item['p_over25'];
+                final pUnder = pred['p_under25'] ?? item['p_under25'];
+
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${(item["home"] ?? "").toString()} vs ${(item["away"] ?? "").toString()}',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 12),
+                    _PredRow(label: '1 (Home)', value: _fmtPct(pHome)),
+                    _PredRow(label: 'X (Draw)', value: _fmtPct(pDraw)),
+                    _PredRow(label: '2 (Away)', value: _fmtPct(pAway)),
+                    const Divider(height: 24),
+                    _PredRow(label: 'Over 2.5', value: _fmtPct(pOver)),
+                    _PredRow(label: 'Under 2.5', value: _fmtPct(pUnder)),
+                    const SizedBox(height: 16),
+                  ],
+                );
+              },
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -133,7 +160,10 @@ class _FixturesScreenState extends State<FixturesScreen> {
       appBar: AppBar(
         title: Text(widget.title),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _refresh,
+          ),
         ],
       ),
       body: FutureBuilder<List<Map<String, dynamic>>>(
@@ -142,6 +172,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
+
           if (snapshot.hasError) {
             return Center(
               child: Padding(
@@ -153,7 +184,9 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
           final data = snapshot.data ?? [];
           if (data.isEmpty) {
-            return const Center(child: Text('Nu există meciuri în perioada aleasă.'));
+            return const Center(
+              child: Text('Nu există meciuri în perioada aleasă.'),
+            );
           }
 
           final grouped = _groupByLeague(data);
@@ -170,17 +203,24 @@ class _FixturesScreenState extends State<FixturesScreen> {
                 final leagueId = leagueIds[idx];
                 final items = grouped[leagueId] ?? [];
 
-                // (optional) sort meciuri după kickoff
-                items.sort((a, b) => (a['kickoff'] ?? '').toString().compareTo(
-                      (b['kickoff'] ?? '').toString(),
-                    ));
+                // ✅ sortare “confidence” (desc), apoi kickoff ca tie-breaker
+                items.sort((a, b) {
+                  final c = _confidence(b).compareTo(_confidence(a));
+                  if (c != 0) return c;
+                  final ka = (a['kickoff'] ?? '').toString();
+                  final kb = (b['kickoff'] ?? '').toString();
+                  return ka.compareTo(kb);
+                });
 
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     // HEADER LIGĂ
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                       color: Theme.of(context).colorScheme.surfaceContainerHighest,
                       child: Row(
                         children: [
@@ -202,6 +242,8 @@ class _FixturesScreenState extends State<FixturesScreen> {
                       final status = (item['status'] ?? '').toString();
                       final kickoff = (item['kickoff'] ?? '').toString();
 
+                      final conf = _confidence(item);
+
                       return Column(
                         children: [
                           ListTile(
@@ -210,10 +252,18 @@ class _FixturesScreenState extends State<FixturesScreen> {
                             isThreeLine: true,
                             trailing: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
-                                Text('1 ${_fmtPct(item['p_home'])}'),
-                                Text('X ${_fmtPct(item['p_draw'])}'),
-                                Text('2 ${_fmtPct(item['p_away'])}'),
+                                if (conf >= 0.70)
+                                  Text(
+                                    '🔥 ${(conf * 100).toStringAsFixed(0)}%',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                Text('1 ${_fmtPct(item["p_home"])}'),
+                                Text('X ${_fmtPct(item["p_draw"])}'),
+                                Text('2 ${_fmtPct(item["p_away"])}'),
                               ],
                             ),
                             onTap: () => _openPrediction(context, item),
@@ -237,7 +287,10 @@ class _PredRow extends StatelessWidget {
   final String label;
   final String value;
 
-  const _PredRow({required this.label, required this.value});
+  const _PredRow({
+    required this.label,
+    required this.value,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -246,7 +299,10 @@ class _PredRow extends StatelessWidget {
       child: Row(
         children: [
           Expanded(child: Text(label)),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+          Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
         ],
       ),
     );

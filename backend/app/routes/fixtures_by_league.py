@@ -1,24 +1,93 @@
-from fastapi import APIRouter, HTTPException, Query
-from app.services.api_football import fetch_fixtures_by_league
+from fastapi import APIRouter, HTTPException
+from typing import Optional, List
 
-router = APIRouter()
+from app.db import get_db
+
+router = APIRouter(prefix="/fixtures", tags=["fixtures"])
 
 
-@router.get("/fixtures/by-league")
-async def fixtures_by_league(
-    provider_league_id: str = Query(..., description="Ex: api_39"),
-    season: int = Query(2024, description="Ex: 2024"),
+@router.get("/by-league")
+def list_fixtures_by_league(
+    league_id: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    status: Optional[str] = None,
+    run_type: str = "initial",
+    limit: int = 50,
+    offset: int = 0,
 ):
-    # provider_league_id vine ca "api_39" -> API-Football vrea "39"
-    if not provider_league_id.startswith("api_"):
-        raise HTTPException(status_code=400, detail="provider_league_id must look like api_39")
+    """
+    Return fixtures for a league_id (our internal uuid from /leagues),
+    filtered by optional date range/status, and run_type.
+    """
 
-    league_num = provider_league_id.replace("api_", "").strip()
-    if not league_num.isdigit():
-        raise HTTPException(status_code=400, detail="Invalid provider_league_id")
+    db = get_db()
+
+    q = """
+    SELECT
+      id,
+      provider_fixture_id,
+      league_id,
+      kickoff_at,
+      status,
+      home,
+      away,
+      run_type,
+      computed_at,
+      p_home,
+      p_draw,
+      p_away,
+      p_gg,
+      p_over25,
+      p_under25
+    FROM fixtures
+    WHERE league_id = ?
+      AND run_type = ?
+    """
+
+    params: List[object] = [league_id, run_type]
+
+    if status:
+        q += " AND status = ?"
+        params.append(status)
+
+    if date_from:
+        q += " AND kickoff_at >= ?"
+        params.append(date_from)
+
+    if date_to:
+        q += " AND kickoff_at <= ?"
+        params.append(date_to)
+
+    q += " ORDER BY kickoff_at ASC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
     try:
-        data = await fetch_fixtures_by_league(league_num, season=season)
-        return data
+        rows = db.execute(q, params).fetchall()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    # sqlite row -> dict
+    res = []
+    for r in rows:
+        res.append(
+            {
+                "id": r[0],
+                "provider_fixture_id": r[1],
+                "league_id": r[2],
+                "kickoff_at": r[3],
+                "status": r[4],
+                "home": r[5],
+                "away": r[6],
+                "run_type": r[7],
+                "computed_at": r[8],
+                "p_home": r[9],
+                "p_draw": r[10],
+                "p_away": r[11],
+                "p_gg": r[12],
+                "p_over25": r[13],
+                "p_under25": r[14],
+            }
+        )
+
+    return res

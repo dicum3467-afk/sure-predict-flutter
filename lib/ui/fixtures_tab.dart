@@ -26,14 +26,14 @@ class _FixturesTabState extends State<FixturesTab> {
   final TextEditingController _searchCtrl = TextEditingController();
   String _search = '';
 
-  // expand/collapse per grup
-  final Set<String> _expandedGroups = {}; // keys: country
+  // expand/collapse
+  final Set<String> _expandedCountries = {}; // key: country
+  final Set<String> _expandedTiers = {}; // key: "$country|$tier"
 
   @override
   void initState() {
     super.initState();
 
-    // load leagues once
     if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
       widget.leaguesStore.load();
     }
@@ -71,44 +71,19 @@ class _FixturesTabState extends State<FixturesTab> {
     });
   }
 
-  void _clearSelection() {
-    setState(() => _selectedLeagueIds.clear());
-  }
-
-  Map<String, List<Map<String, dynamic>>> _groupByCountry(
-    List<Map<String, dynamic>> leagues,
-  ) {
-    final Map<String, List<Map<String, dynamic>>> groups = {};
-    for (final l in leagues) {
-      final country = (l['country'] ?? 'Other').toString().trim();
-      groups.putIfAbsent(country.isEmpty ? 'Other' : country, () => []).add(l);
-    }
-
-    // sort groups alphabetically, but keep "Other" last
-    final entries = groups.entries.toList()
-      ..sort((a, b) {
-        if (a.key == 'Other' && b.key != 'Other') return 1;
-        if (b.key == 'Other' && a.key != 'Other') return -1;
-        return a.key.compareTo(b.key);
-      });
-
-    return {for (final e in entries) e.key: (e.value..sort(_leagueSort))};
-  }
-
-  static int _leagueSort(Map<String, dynamic> a, Map<String, dynamic> b) {
-    // prefer tier (if exists) then name
-    int tierA = _tryInt(a['tier']) ?? 9999;
-    int tierB = _tryInt(b['tier']) ?? 9999;
-    if (tierA != tierB) return tierA.compareTo(tierB);
-
-    final nameA = (a['name'] ?? '').toString();
-    final nameB = (b['name'] ?? '').toString();
-    return nameA.compareTo(nameB);
-  }
+  void _clearSelection() => setState(() => _selectedLeagueIds.clear());
 
   static int? _tryInt(dynamic v) {
     if (v is int) return v;
     return int.tryParse(v?.toString() ?? '');
+  }
+
+  static String _tierLabel(Map<String, dynamic> l) {
+    final t = l['tier'];
+    final ti = _tryInt(t);
+    if (ti != null) return 'Tier $ti';
+    final s = (t ?? '').toString().trim();
+    return s.isEmpty ? 'Tier ?' : 'Tier $s';
   }
 
   List<Map<String, dynamic>> _filterLeagues(List<Map<String, dynamic>> leagues) {
@@ -128,10 +103,68 @@ class _FixturesTabState extends State<FixturesTab> {
     return leagues.where(matches).toList();
   }
 
+  Map<String, Map<String, List<Map<String, dynamic>>>> _groupCountryTier(
+    List<Map<String, dynamic>> leagues,
+  ) {
+    // country -> tierLabel -> leagues
+    final Map<String, Map<String, List<Map<String, dynamic>>>> out = {};
+
+    for (final l in leagues) {
+      final countryRaw = (l['country'] ?? 'Other').toString().trim();
+      final country = countryRaw.isEmpty ? 'Other' : countryRaw;
+
+      final tier = _tierLabel(l);
+
+      out.putIfAbsent(country, () => {});
+      out[country]!.putIfAbsent(tier, () => []);
+      out[country]![tier]!.add(l);
+    }
+
+    // sort inside each tier by name
+    for (final country in out.keys) {
+      for (final tier in out[country]!.keys) {
+        out[country]![tier]!.sort((a, b) {
+          final na = (a['name'] ?? '').toString();
+          final nb = (b['name'] ?? '').toString();
+          return na.compareTo(nb);
+        });
+      }
+    }
+
+    return out;
+  }
+
+  List<String> _sortedCountries(Iterable<String> countries) {
+    final list = countries.toList();
+    list.sort((a, b) {
+      if (a == 'Other' && b != 'Other') return 1;
+      if (b == 'Other' && a != 'Other') return -1;
+      return a.compareTo(b);
+    });
+    return list;
+  }
+
+  List<String> _sortedTiers(Iterable<String> tiers) {
+    // sort Tier 1, Tier 2, ... then others
+    int tierNum(String s) {
+      final m = RegExp(r'(\d+)').firstMatch(s);
+      if (m == null) return 9999;
+      return int.tryParse(m.group(1)!) ?? 9999;
+    }
+
+    final list = tiers.toList();
+    list.sort((a, b) {
+      final ta = tierNum(a);
+      final tb = tierNum(b);
+      if (ta != tb) return ta.compareTo(tb);
+      return a.compareTo(b);
+    });
+    return list;
+  }
+
   void _goToFixtures() {
     final ids = _selectedLeagueIds.toList();
 
-    // id -> name
     final Map<String, String> namesById = {};
     for (final l in widget.leaguesStore.items) {
       final id = (l['id'] ?? '').toString();
@@ -155,7 +188,7 @@ class _FixturesTabState extends State<FixturesTab> {
   Widget build(BuildContext context) {
     final allLeagues = widget.leaguesStore.items;
     final visibleLeagues = _filterLeagues(allLeagues);
-    final groups = _groupByCountry(visibleLeagues);
+    final grouped = _groupCountryTier(visibleLeagues);
 
     final hasSelection = _selectedLeagueIds.isNotEmpty;
 
@@ -192,22 +225,21 @@ class _FixturesTabState extends State<FixturesTab> {
             ),
             const SizedBox(height: 12),
 
-            // Chips (selected)
-            if (hasSelection) _SelectedChips(
-              selectedIds: _selectedLeagueIds,
-              leagues: allLeagues,
-              onRemoveId: (id) => setState(() => _selectedLeagueIds.remove(id)),
-            ),
+            if (hasSelection)
+              _SelectedChips(
+                selectedIds: _selectedLeagueIds,
+                leagues: allLeagues,
+                onRemoveId: (id) =>
+                    setState(() => _selectedLeagueIds.remove(id)),
+              ),
 
             if (hasSelection) const SizedBox(height: 10),
 
-            // Quick actions row
             Row(
               children: [
                 FilledButton.tonalIcon(
-                  onPressed: visibleLeagues.isEmpty
-                      ? null
-                      : () => _selectAllVisible(visibleLeagues),
+                  onPressed:
+                      visibleLeagues.isEmpty ? null : () => _selectAllVisible(visibleLeagues),
                   icon: const Icon(Icons.done_all),
                   label: const Text('Select all'),
                 ),
@@ -230,7 +262,6 @@ class _FixturesTabState extends State<FixturesTab> {
 
             const SizedBox(height: 12),
 
-            // Loading / error
             if (widget.leaguesStore.isLoading)
               const Expanded(
                 child: Center(child: CircularProgressIndicator()),
@@ -246,32 +277,40 @@ class _FixturesTabState extends State<FixturesTab> {
               )
             else if (visibleLeagues.isEmpty)
               const Expanded(
-                child: Center(
-                  child: Text('Nu există ligi pentru filtrul curent.'),
-                ),
+                child: Center(child: Text('Nu există ligi pentru filtrul curent.')),
               )
             else
-              // Grouped list
               Expanded(
                 child: ListView(
                   children: [
-                    for (final entry in groups.entries)
-                      _CountryGroup(
-                        country: entry.key,
-                        leagues: entry.value,
-                        expanded: _search.isNotEmpty ||
-                            _expandedGroups.contains(entry.key),
+                    for (final country in _sortedCountries(grouped.keys))
+                      _CountryCard(
+                        country: country,
+                        tiers: grouped[country]!,
+                        isCountryExpanded: _search.isNotEmpty ||
+                            _expandedCountries.contains(country),
+                        expandedTiers: _expandedTiers,
                         selectedIds: _selectedLeagueIds,
-                        onToggleExpand: () {
+                        onToggleCountry: () {
                           setState(() {
-                            if (_expandedGroups.contains(entry.key)) {
-                              _expandedGroups.remove(entry.key);
+                            if (_expandedCountries.contains(country)) {
+                              _expandedCountries.remove(country);
                             } else {
-                              _expandedGroups.add(entry.key);
+                              _expandedCountries.add(country);
+                            }
+                          });
+                        },
+                        onToggleTier: (tierKey) {
+                          setState(() {
+                            if (_expandedTiers.contains(tierKey)) {
+                              _expandedTiers.remove(tierKey);
+                            } else {
+                              _expandedTiers.add(tierKey);
                             }
                           });
                         },
                         onToggleLeague: _toggleLeague,
+                        tierSorter: _sortedTiers,
                       ),
                     const SizedBox(height: 80),
                   ],
@@ -284,58 +323,105 @@ class _FixturesTabState extends State<FixturesTab> {
   }
 }
 
-class _CountryGroup extends StatelessWidget {
+class _CountryCard extends StatelessWidget {
   final String country;
-  final List<Map<String, dynamic>> leagues;
-  final bool expanded;
+  final Map<String, List<Map<String, dynamic>>> tiers; // tierLabel -> leagues
+  final bool isCountryExpanded;
+  final Set<String> expandedTiers;
   final Set<String> selectedIds;
-  final VoidCallback onToggleExpand;
+  final VoidCallback onToggleCountry;
+  final void Function(String tierKey) onToggleTier;
   final void Function(Map<String, dynamic> league) onToggleLeague;
+  final List<String> Function(Iterable<String>) tierSorter;
 
-  const _CountryGroup({
+  const _CountryCard({
     required this.country,
-    required this.leagues,
-    required this.expanded,
+    required this.tiers,
+    required this.isCountryExpanded,
+    required this.expandedTiers,
     required this.selectedIds,
-    required this.onToggleExpand,
+    required this.onToggleCountry,
+    required this.onToggleTier,
     required this.onToggleLeague,
+    required this.tierSorter,
   });
+
+  int _selectedCountInCountry() {
+    int c = 0;
+    for (final list in tiers.values) {
+      for (final l in list) {
+        final id = (l['id'] ?? '').toString();
+        if (selectedIds.contains(id)) c++;
+      }
+    }
+    return c;
+  }
+
+  int _totalCountInCountry() {
+    int c = 0;
+    for (final list in tiers.values) {
+      c += list.length;
+    }
+    return c;
+  }
+
+  int _selectedCountInTier(List<Map<String, dynamic>> list) {
+    int c = 0;
+    for (final l in list) {
+      final id = (l['id'] ?? '').toString();
+      if (selectedIds.contains(id)) c++;
+    }
+    return c;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final selectedInGroup = leagues.where((l) {
-      final id = (l['id'] ?? '').toString();
-      return selectedIds.contains(id);
-    }).length;
+    final total = _totalCountInCountry();
+    final selected = _selectedCountInCountry();
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: Column(
         children: [
           ListTile(
-            onTap: onToggleExpand,
+            onTap: onToggleCountry,
             title: Text(country),
-            subtitle: Text('${leagues.length} ligi • selectate: $selectedInGroup'),
-            trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
+            subtitle: Text('$total ligi • selectate: $selected'),
+            trailing: Icon(isCountryExpanded ? Icons.expand_less : Icons.expand_more),
           ),
-          if (expanded)
-            const Divider(height: 1),
-          if (expanded)
-            ...leagues.map((l) {
-              final id = (l['id'] ?? '').toString();
-              final name = (l['name'] ?? 'League').toString();
-              final tier = (l['tier'] ?? '').toString();
-              final checked = selectedIds.contains(id);
+          if (isCountryExpanded) const Divider(height: 1),
+          if (isCountryExpanded)
+            ...tierSorter(tiers.keys).map((tierLabel) {
+              final tierKey = '$country|$tierLabel';
+              final expanded = expandedTiers.contains(tierKey);
+              final list = tiers[tierLabel]!;
+              final selInTier = _selectedCountInTier(list);
 
-              return CheckboxListTile(
-                value: checked,
-                onChanged: (_) => onToggleLeague(l),
-                title: Text(name),
-                subtitle: Text([
-                  if (tier.isNotEmpty) 'Tier $tier',
-                  if (id.isNotEmpty) id,
-                ].join(' • ')),
-                controlAffinity: ListTileControlAffinity.trailing,
+              return Column(
+                children: [
+                  ListTile(
+                    dense: true,
+                    onTap: () => onToggleTier(tierKey),
+                    title: Text(tierLabel),
+                    subtitle: Text('${list.length} ligi • selectate: $selInTier'),
+                    trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
+                  ),
+                  if (expanded) const Divider(height: 1),
+                  if (expanded)
+                    ...list.map((l) {
+                      final id = (l['id'] ?? '').toString();
+                      final name = (l['name'] ?? 'League').toString();
+                      final checked = selectedIds.contains(id);
+
+                      return CheckboxListTile(
+                        value: checked,
+                        onChanged: (_) => onToggleLeague(l),
+                        title: Text(name),
+                        subtitle: Text(id),
+                        controlAffinity: ListTileControlAffinity.trailing,
+                      );
+                    }),
+                ],
               );
             }),
         ],
@@ -357,7 +443,6 @@ class _SelectedChips extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // id -> name
     final Map<String, String> namesById = {
       for (final l in leagues)
         (l['id'] ?? '').toString(): (l['name'] ?? 'League').toString(),

@@ -4,6 +4,7 @@ import '../services/sure_predict_service.dart';
 import '../state/leagues_store.dart';
 import '../state/favorites_store.dart';
 
+import 'top_picks_screen.dart';
 import 'fixtures_tab.dart';
 import 'leagues_screen.dart';
 import 'favorites_screen.dart';
@@ -30,10 +31,12 @@ class _HomeShellState extends State<HomeShell> {
   String get _title {
     switch (_index) {
       case 0:
-        return 'Fixtures';
+        return 'Top Picks';
       case 1:
-        return 'Leagues';
+        return 'Fixtures';
       case 2:
+        return 'Leagues';
+      case 3:
         return 'Favorites';
       default:
         return 'Sure Predict';
@@ -52,6 +55,10 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
+      TopPicksScreen(
+        service: widget.service,
+        favoritesStore: widget.favoritesStore,
+      ),
       FixturesTab(
         service: widget.service,
         leaguesStore: widget.leaguesStore,
@@ -85,6 +92,7 @@ class _HomeShellState extends State<HomeShell> {
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
+          NavigationDestination(icon: Icon(Icons.trending_up), label: 'Top'),
           NavigationDestination(icon: Icon(Icons.sports_soccer), label: 'Fixtures'),
           NavigationDestination(icon: Icon(Icons.public), label: 'Leagues'),
           NavigationDestination(icon: Icon(Icons.star), label: 'Favorites'),

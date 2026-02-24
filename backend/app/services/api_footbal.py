@@ -6,133 +6,88 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 
-API_BASE = os.getenv("API_FOOTBALL_BASE", "https://v3.football.api-sports.io")
+API_FOOTBALL_BASE_URL = os.getenv("API_FOOTBALL_BASE_URL", "https://v3.football.api-sports.io")
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")  # pune-l în Render Env Vars
 
 
-def _get_headers() -> Dict[str, str]:
-    """
-    Suport 2 variante:
-    - direct API-SPORTS:  x-apisports-key
-    - RapidAPI:           X-RapidAPI-Key + X-RapidAPI-Host
-    """
-    key = os.getenv("API_FOOTBALL_KEY") or os.getenv("RAPIDAPI_KEY")
-    if not key:
-        raise RuntimeError("Missing API key env. Set API_FOOTBALL_KEY (or RAPIDAPI_KEY).")
+class ApiFootballError(Exception):
+    pass
 
-    rapid_host = os.getenv("API_FOOTBALL_HOST", "v3.football.api-sports.io")
 
-    # Dacă userul setează API_FOOTBALL_MODE=apisports, folosim headerul apisports
-    mode = (os.getenv("API_FOOTBALL_MODE") or "rapidapi").lower().strip()
-
-    if mode == "apisports":
-        return {"x-apisports-key": key}
-
-    # default: RapidAPI
+def _headers() -> Dict[str, str]:
+    if not API_FOOTBALL_KEY:
+        raise ApiFootballError("Missing API_FOOTBALL_KEY env var")
     return {
-        "X-RapidAPI-Key": key,
-        "X-RapidAPI-Host": rapid_host,
+        "x-apisports-key": API_FOOTBALL_KEY,
+        "accept": "application/json",
     }
 
 
-async def _get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    url = f"{API_BASE}{path}"
-    headers = _get_headers()
-
-    timeout = float(os.getenv("API_FOOTBALL_TIMEOUT", "20"))
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.get(url, headers=headers, params=params)
-        r.raise_for_status()
-        return r.json()
-
-
-def _as_iso_dt(fx: Dict[str, Any]) -> Optional[str]:
-    # API-Football: fixture.date este ISO
-    fixture = fx.get("fixture") or {}
-    return fixture.get("date")
-
-
-def _status_short(fx: Dict[str, Any]) -> str:
-    st = ((fx.get("fixture") or {}).get("status") or {})
-    return (st.get("short") or "").strip()
-
-
-def _team_name(side: str, fx: Dict[str, Any]) -> str:
-    teams = fx.get("teams") or {}
-    team = teams.get(side) or {}
-    return (team.get("name") or "").strip()
-
-
-def _predictions_flat(pred: Dict[str, Any]) -> Dict[str, Optional[float]]:
-    """
-    Dacă folosești endpoint /predictions, API-Football dă probabilități în:
-      response[0].predictions.percent.home / draw / away (ex "45%")
-    Aici le transformăm în float 0..100
-    """
-    out = {"p_home": None, "p_draw": None, "p_away": None, "p_gg": None, "p_over25": None, "p_under25": None}
-
-    p = pred.get("predictions") or {}
-    percent = p.get("percent") or {}
-
-    def pct(x: Any) -> Optional[float]:
-        if x is None:
-            return None
-        if isinstance(x, (int, float)):
-            return float(x)
-        s = str(x).replace("%", "").strip()
-        try:
-            return float(s)
-        except Exception:
-            return None
-
-    out["p_home"] = pct(percent.get("home"))
-    out["p_draw"] = pct(percent.get("draw"))
-    out["p_away"] = pct(percent.get("away"))
-
-    # restul le poți completa când implementezi endpointuri extra
-    return out
-
-
-async def fetch_fixtures_by_league(
+def fetch_fixtures_by_league(
     league_id: str,
     season: int,
     days_ahead: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Returnează o listă flat pentru DB-ul tău, cu chei:
-      provider_fixture_id, kickoff_at, status, home, away
-    + câmpuri de probabilități (momentan None dacă nu tragi predictions).
+    Returnează o listă de fixtures (dict-uri) din API-Football.
+    league_id = id numeric de la provider (ex: 39 EPL).
     """
-    params: Dict[str, Any] = {"league": league_id, "season": season}
 
-    # opțional: dacă vrei doar viitorul apropiat, API-Football are "next"
-    # days_ahead nu e direct param standard, deci îl ignorăm aici ca să nu crape.
-    # (îl poți implementa cu date_from/date_to ulterior)
-    data = await _get("/fixtures", params=params)
+    params: Dict[str, Any] = {
+        "league": league_id,
+        "season": season,
+    }
 
-    items = (data.get("response") or [])
-    out: List[Dict[str, Any]] = []
+    # opțional: dacă vrei să limitezi doar următoarele N zile, putem filtra după date local
+    # sau putem cere "from/to" dacă providerul suportă. Aici ținem simplu.
+    timeout = httpx.Timeout(20.0)
 
-    for it in items:
-        fixture = it.get("fixture") or {}
-        fid = fixture.get("id")
-        if not fid:
-            continue
+    with httpx.Client(base_url=API_FOOTBALL_BASE_URL, headers=_headers(), timeout=timeout) as client:
+        r = client.get("/fixtures", params=params)
+        if r.status_code != 200:
+            raise ApiFootballError(f"API-Football error {r.status_code}: {r.text[:300]}")
 
-        out.append(
-            {
-                "provider_fixture_id": str(fid),
-                "kickoff_at": _as_iso_dt(it),
-                "status": _status_short(it),
-                "home": _team_name("home", it),
-                "away": _team_name("away", it),
-                # probabilități – dacă nu chemi /predictions, rămân None
-                "p_home": None,
-                "p_draw": None,
-                "p_away": None,
-                "p_gg": None,
-                "p_over25": None,
-                "p_under25": None,
-            }
-        )
+        data = r.json()
+        resp = data.get("response") or []
+        out: List[Dict[str, Any]] = []
 
-    return out
+        for item in resp:
+            fixture = item.get("fixture", {}) or {}
+            teams = item.get("teams", {}) or {}
+            goals = item.get("goals", {}) or {}
+
+            provider_fixture_id = fixture.get("id")
+            kickoff = fixture.get("date")  # ISO string
+
+            home_name = (teams.get("home") or {}).get("name")
+            away_name = (teams.get("away") or {}).get("name")
+
+            status_long = ((fixture.get("status") or {}).get("long")) or ""
+            # status scurt pentru DB
+            status = (status_long or "").strip()[:32]
+
+            # scor (dacă există)
+            hg = goals.get("home")
+            ag = goals.get("away")
+
+            out.append(
+                {
+                    "provider_fixture_id": str(provider_fixture_id) if provider_fixture_id is not None else None,
+                    "kickoff_at": kickoff,
+                    "status": status,
+                    "home": home_name or "",
+                    "away": away_name or "",
+                    # dacă vrei probabilități, le calculezi tu separat -> aici lăsăm None
+                    "p_home": None,
+                    "p_draw": None,
+                    "p_away": None,
+                    "p_gg": None,
+                    "p_over25": None,
+                    "p_under25": None,
+                    "computed_at": None,
+                }
+            )
+
+        # dacă vrei days_ahead, filtrăm aici simplu după kickoff date (opțional)
+        # (am lăsat fără filtrare ca să nu stricăm)
+        return out

@@ -14,10 +14,12 @@ dependencies:
   # 🌐 API calls
   http: ^1.2.1
 
-  # ⭐ persist favorites
+  # ⭐ persist favorites + settings + cache
   shared_preferences: ^2.2.3
 
-  # 🎨 icons (optional but recommended)
+  # 💰 Ads
+  google_mobile_ads: ^5.1.0
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

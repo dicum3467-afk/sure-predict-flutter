@@ -1,35 +1,43 @@
-// lib/ui/favorites_screen.dart
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import '../services/sure_predict_service.dart';
 import '../state/favorites_store.dart';
 
 class FavoritesScreen extends StatelessWidget {
-  const FavoritesScreen({super.key});
+  final SurePredictService service;
+  final FavoritesStore favoritesStore;
+
+  const FavoritesScreen({
+    super.key,
+    required this.service,
+    required this.favoritesStore,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final fav = context.watch<FavoritesStore>();
+    final items = favoritesStore.items;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Favorite'),
-      ),
-      body: fav.ids.isEmpty
-          ? const Center(
-              child: Text('Nu ai favorite încă'),
-            )
-          : ListView(
-              children: fav.ids.map((id) {
-                return ListTile(
-                  leading: const Icon(Icons.star, color: Colors.amber),
-                  title: Text('Fixture ID: $id'),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => fav.toggle(id),
-                  ),
-                );
-              }).toList(),
-            ),
+    if (items.isEmpty) {
+      return const Center(
+        child: Text('Nu ai favorite încă ⭐'),
+      );
+    }
+
+    return ListView.separated(
+      itemCount: items.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final f = items[index];
+
+        final home = (f['home'] ?? '').toString();
+        final away = (f['away'] ?? '').toString();
+        final kickoff = (f['kickoff'] ?? '').toString();
+
+        return ListTile(
+          leading: const Icon(Icons.star, color: Colors.amber),
+          title: Text('$home vs $away'),
+          subtitle: Text(kickoff),
+        );
+      },
     );
   }
 }

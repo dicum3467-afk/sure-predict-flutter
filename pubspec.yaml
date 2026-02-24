@@ -1,5 +1,5 @@
 name: sure_predict
-description: Sure Predict - Football predictions
+description: Sure Predict football predictions app
 publish_to: "none"
 
 version: 1.0.0+1
@@ -11,24 +11,20 @@ dependencies:
   flutter:
     sdk: flutter
 
-  flutter_localizations:
-    sdk: flutter
+  # 🌐 API calls
+  http: ^1.2.1
 
-  intl: any
-  http: ^1.2.2
-  modal_bottom_sheet: ^3.0.0
-  google_mobile_ads: ^4.0.0
-  shared_preferences: ^2.2.2
+  # ⭐ persist favorites
+  shared_preferences: ^2.2.3
+
+  # 🎨 icons (optional but recommended)
+  cupertino_icons: ^1.0.8
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  flutter_lints: ^3.0.0
+  flutter_lints: ^3.0.2
 
 flutter:
   uses-material-design: true
-
-  assets:
-    - lib/l10n/app_ro.arb
-    - lib/l10n/app_en.arb

@@ -1,47 +1,38 @@
+# backend/app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Rutele existente (din repo-ul tău)
-from app.routes import leagues
-from app.routes import fixtures_by_league
-
-# Dacă ai deja aceste fișiere/rute în proiect, lasă-le active:
-# - health.py (GET /health)
-# - fixtures.py (GET /fixtures, GET /fixtures/{provider_fixture_id}/prediction)
-# Dacă NU le ai cu aceste nume, comentează importurile și include_router corespunzătoare.
-try:
-    from app.routes import health
-except Exception:
-    health = None
-
-try:
-    from app.routes import fixtures
-except Exception:
-    fixtures = None
-
-# Ruta nouă (pe care ai creat-o la PASUL 1): backend/app/routes/fixtures_sync.py
-from app.routes import fixtures_sync
+# Routers
+from app.routes.leagues import router as leagues_router
+from app.routes.fixtures_by_league import router as fixtures_by_league_router
+from app.routes.fixtures_sync import router as fixtures_sync_router
 
 
-app = FastAPI(title="Sure Predict API")
+app = FastAPI(
+    title="Sure Predict API",
+    version="1.0.0",
+)
 
-# CORS (ca să meargă din Flutter, browser, etc.)
+# CORS (poți lăsa * pentru test; la producție pui domeniile tale)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # în producție poți restrânge
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---- Include routers ----
-if health is not None:
-    app.include_router(health.router)
+# Health check (warm-up / monitorizare)
+@app.get("/health", tags=["health"])
+def health():
+    return {"ok": True}
 
-app.include_router(leagues.router)
-app.include_router(fixtures_by_league.router)
+# Include routes
+app.include_router(leagues_router)            # /leagues
+app.include_router(fixtures_by_league_router) # /fixtures/by-league
+app.include_router(fixtures_sync_router)      # /fixtures/sync (și ce ai definit acolo)
 
-if fixtures is not None:
-    app.include_router(fixtures.router)
-
-app.include_router(fixtures_sync.router)
+# Optional root
+@app.get("/", tags=["root"])
+def root():
+    return {"service": "sure-predict-backend", "docs": "/docs"}

@@ -18,17 +18,16 @@ class TopPicksScreen extends StatefulWidget {
 }
 
 class _TopPicksScreenState extends State<TopPicksScreen> {
-  // range default
-  String _from = '2026-02-01';
-  String _to = '2026-02-28';
+  // default: next 7 days
+  late String _from;
+  late String _to;
+
   String _runType = 'initial';
   String? _status;
 
-  // filters
   bool _onlyStrong = true;
   double _threshold = 0.60;
 
-  // top size
   int _topN = 20;
 
   bool _loading = false;
@@ -37,6 +36,11 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
   @override
   void initState() {
     super.initState();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    _from = _fmt(today);
+    _to = _fmt(today.add(const Duration(days: 7)));
+
     _load();
   }
 
@@ -96,11 +100,68 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
   String _fmtPct(dynamic v) => '${(_num(v) * 100).toStringAsFixed(0)}%';
 
+  String _fmt(DateTime d) {
+    String two(int x) => x < 10 ? '0$x' : '$x';
+    return '${d.year}-${two(d.month)}-${two(d.day)}';
+  }
+
+  Future<void> _pickFrom() async {
+    final initial = _parseDate(_from) ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() => _from = _fmt(picked));
+  }
+
+  Future<void> _pickTo() async {
+    final initial = _parseDate(_to) ?? DateTime.now().add(const Duration(days: 7));
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() => _to = _fmt(picked));
+  }
+
+  DateTime? _parseDate(String s) {
+    try {
+      final p = s.split('-');
+      if (p.length != 3) return null;
+      return DateTime(int.parse(p[0]), int.parse(p[1]), int.parse(p[2]));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _presetNext7() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    setState(() {
+      _from = _fmt(today);
+      _to = _fmt(today.add(const Duration(days: 7)));
+    });
+  }
+
+  void _presetToday() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    setState(() {
+      _from = _fmt(today);
+      _to = _fmt(today);
+    });
+  }
+
   Future<void> _load() async {
     setState(() => _loading = true);
 
     try {
-      // luăm un batch mai mare ca să avem de unde selecta top
+      // luăm un batch mare ca să putem selecta top
       final data = await widget.service.getFixtures(
         leagueIds: widget.leagueIds,
         from: _from,
@@ -111,7 +172,6 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
         status: _status,
       );
 
-      // sortăm global după score
       data.sort((a, b) => _sortScore(b).compareTo(_sortScore(a)));
 
       var filtered = data;
@@ -241,19 +301,54 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
       appBar: AppBar(
         title: const Text('Top Picks'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _load,
-          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
         ],
       ),
       body: Column(
         children: [
-          // mini controls
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
             child: Column(
               children: [
+                Row(
+                  children: [
+                    OutlinedButton(
+                      onPressed: _presetToday,
+                      child: const Text('Today'),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton(
+                      onPressed: _presetNext7,
+                      child: const Text('Next 7'),
+                    ),
+                    const Spacer(),
+                    FilledButton(
+                      onPressed: _load,
+                      child: const Text('Load'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _pickFrom,
+                        icon: const Icon(Icons.date_range),
+                        label: Text('From: $_from'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _pickTo,
+                        icon: const Icon(Icons.event),
+                        label: Text('To: $_to'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
                 Row(
                   children: [
                     FilterChip(
@@ -281,16 +376,11 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                       ],
                       onChanged: (v) => setState(() => _topN = v ?? 20),
                     ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: _load,
-                      child: const Text('Load'),
-                    ),
                   ],
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Interval: $_from → $_to • run_type=$_runType',
+                  'Default: Next 7 days • run_type=$_runType',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],

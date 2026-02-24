@@ -19,23 +19,16 @@ class TopPicksScreen extends StatefulWidget {
 }
 
 class _TopPicksScreenState extends State<TopPicksScreen> {
-  // ✅ Prag Top Picks
-  double _threshold = 0.60; // 60%
+  double _threshold = 0.60;
 
-  // ✅ Status filter
-  // all | scheduled | live | finished
-  String _status = 'all';
+  String _status = 'all'; // all|scheduled|live|finished
 
-  // ✅ Mode: global vs top-per-league
   bool _topPerLeague = false;
   int _topNPerLeague = 10;
 
-  // ✅ Days: today / tomorrow
   int _dayIndex = 0; // 0=today, 1=tomorrow
-
   String _runType = 'initial';
 
-  // Pagination
   static const int _pageSize = 80;
   int _offset = 0;
   bool _loading = false;
@@ -48,6 +41,8 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
   final ScrollController _scroll = ScrollController();
 
   Timer? _timer;
+
+  CacheInfo? _cacheInfo;
 
   @override
   void initState() {
@@ -69,7 +64,6 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     super.dispose();
   }
 
-  // ---------- date helpers ----------
   DateTime _today() {
     final now = DateTime.now();
     return DateTime(now.year, now.month, now.day);
@@ -85,11 +79,9 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
   ({String from, String to, String label}) _rangeForIndex(int idx) {
     final base = _today();
     final day = base.add(Duration(days: idx));
-    // range = aceeași zi (from=day, to=day)
     return (from: _fmtDate(day), to: _fmtDate(day), label: idx == 0 ? 'Today' : 'Tomorrow');
   }
 
-  // ---------- data helpers ----------
   double _num(dynamic v) {
     if (v == null) return 0.0;
     if (v is num) return v.toDouble();
@@ -192,10 +184,23 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     _timer = Timer.periodic(const Duration(seconds: 30), (_) async {
       if (!mounted) return;
       await _refreshSoft();
+      await _refreshCacheInfo(); // update badge
+      setState(() {});
     });
   }
 
-  // ---------- loading ----------
+  Future<void> _refreshCacheInfo() async {
+    final r = _rangeForIndex(_dayIndex);
+    _cacheInfo = await widget.service.fixturesCacheInfo(
+      leagueIds: const [],
+      from: r.from,
+      to: r.to,
+      limit: _pageSize,
+      offset: 0,
+      runType: _runType,
+    );
+  }
+
   Future<void> _loadInitial() async {
     final r = _rangeForIndex(_dayIndex);
 
@@ -210,14 +215,15 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     });
 
     try {
+      await _refreshCacheInfo();
+
       final page = await widget.service.getFixtures(
-        leagueIds: const [], // ✅ ALL leagues
+        leagueIds: const [],
         from: r.from,
         to: r.to,
         limit: _pageSize,
         offset: 0,
         runType: _runType,
-        // NU trimitem status aici (filtrăm local) ca să nu pierdem LIVE mixed
       );
 
       for (final it in page) {
@@ -300,14 +306,13 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     } catch (_) {}
   }
 
-  Future<void> _refreshHard() async => _loadInitial();
+  Future<void> _refreshHard() async {
+    await _loadInitial();
+  }
 
-  // ---------- build Top Picks ----------
   List<Map<String, dynamic>> _buildTopPicks() {
-    // 1) filter status
     final filtered = _all.where(_statusMatches).toList();
 
-    // 2) compute best + threshold filter
     final List<Map<String, dynamic>> picks = [];
     for (final it in filtered) {
       final best = _bestPick(it);
@@ -319,7 +324,6 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
       }
     }
 
-    // 3) sort: LIVE first, best desc, kickoff asc
     picks.sort((a, b) {
       final ra = _statusRank(a);
       final rb = _statusRank(b);
@@ -332,7 +336,6 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
       return _parseKickoff(a).compareTo(_parseKickoff(b));
     });
 
-    // 4) option: top per league
     if (_topPerLeague) {
       final out = <Map<String, dynamic>>[];
       final byLeague = <String, List<Map<String, dynamic>>>{};
@@ -342,12 +345,10 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
         byLeague.putIfAbsent(leagueId, () => []).add(it);
       }
 
-      // ia primele N din fiecare ligă, păstrând sortarea internă
       byLeague.forEach((_, list) {
         out.addAll(list.take(_topNPerLeague));
       });
 
-      // resort global după aceleași reguli
       out.sort((a, b) {
         final ra = _statusRank(a);
         final rb = _statusRank(b);
@@ -366,7 +367,35 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     return picks;
   }
 
-  // ---------- prediction sheet ----------
+  String _cacheBadgeText() {
+    final info = _cacheInfo;
+    if (info == null || info.ageSeconds == null) return 'No cache';
+    final sec = info.ageSeconds!;
+    final min = (sec / 60).floor();
+
+    if (info.isFresh) {
+      if (min <= 0) return 'Updated just now';
+      return 'Updated ${min}m ago';
+    } else {
+      if (min <= 0) return 'Cached (stale)';
+      return 'Cached (stale) · ${min}m';
+    }
+  }
+
+  Color _cacheBadgeBg(BuildContext context) {
+    final info = _cacheInfo;
+    final cs = Theme.of(context).colorScheme;
+    if (info == null) return cs.surfaceContainerHighest;
+    return info.isFresh ? cs.primaryContainer : cs.surfaceContainerHighest;
+  }
+
+  Color _cacheBadgeFg(BuildContext context) {
+    final info = _cacheInfo;
+    final cs = Theme.of(context).colorScheme;
+    if (info == null) return cs.onSurfaceVariant;
+    return info.isFresh ? cs.onPrimaryContainer : cs.onSurfaceVariant;
+  }
+
   void _openPrediction(BuildContext context, Map<String, dynamic> item) {
     final providerId = (item['provider_fixture_id'] ?? '').toString();
     if (providerId.isEmpty) return;
@@ -451,15 +480,12 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     final r = _rangeForIndex(_dayIndex);
     final top = _buildTopPicks();
 
-    // live timer based on TOP list
     WidgetsBinding.instance.addPostFrameCallback((_) => _startOrStopTimer(top));
 
     return AnimatedBuilder(
       animation: widget.favoritesStore,
       builder: (context, _) {
-        if (_loading) {
-          return const Center(child: CircularProgressIndicator());
-        }
+        if (_loading) return const Center(child: CircularProgressIndicator());
 
         if (_error != null) {
           return Center(
@@ -479,7 +505,6 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
         return Column(
           children: [
-            // Header
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: Column(
@@ -490,12 +515,23 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                       Expanded(
                         child: Text('Top Picks • ${r.label}', style: Theme.of(context).textTheme.titleLarge),
                       ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: _cacheBadgeBg(context),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          _cacheBadgeText(),
+                          style: TextStyle(color: _cacheBadgeFg(context), fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
                       IconButton(icon: const Icon(Icons.refresh), onPressed: _refreshHard),
                     ],
                   ),
                   const SizedBox(height: 8),
 
-                  // Today/Tomorrow switch
                   SegmentedButton<int>(
                     segments: const [
                       ButtonSegment(value: 0, label: Text('Today')),
@@ -510,16 +546,12 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
                   const SizedBox(height: 10),
 
-                  // Status filter + top-per-league
                   Row(
                     children: [
                       Expanded(
                         child: DropdownButtonFormField<String>(
                           value: _status,
-                          decoration: const InputDecoration(
-                            labelText: 'Status',
-                            border: OutlineInputBorder(),
-                          ),
+                          decoration: const InputDecoration(labelText: 'Status', border: OutlineInputBorder()),
                           items: const [
                             DropdownMenuItem(value: 'all', child: Text('All')),
                             DropdownMenuItem(value: 'scheduled', child: Text('Scheduled')),
@@ -570,7 +602,6 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
                   const SizedBox(height: 8),
 
-                  // Threshold slider
                   Text('Prag: ${(100 * _threshold).toStringAsFixed(0)}%'),
                   Slider(
                     value: _threshold,
@@ -584,7 +615,6 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
               ),
             ),
 
-            // List
             Expanded(
               child: RefreshIndicator(
                 onRefresh: _refreshHard,

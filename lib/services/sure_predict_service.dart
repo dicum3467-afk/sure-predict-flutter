@@ -6,7 +6,7 @@ import '../core/cache/simple_cache.dart';
 class SurePredictService {
   final ApiClient _api;
 
-  // ✅ cache 15 minute
+  // ✅ cache 15 min + SWR
   final SimpleCache _cache = const SimpleCache(ttl: Duration(minutes: 15));
 
   SurePredictService(this._api);
@@ -17,7 +17,6 @@ class SurePredictService {
 
   // ---------- cache key helpers ----------
   String _stableEncodeQuery(Map<String, dynamic> query) {
-    // sort keys + normalize lists
     final keys = query.keys.toList()..sort();
     final out = <String, dynamic>{};
 
@@ -39,37 +38,22 @@ class SurePredictService {
     return '$path?${_stableEncodeQuery(query)}';
   }
 
-  // ---------- leagues (cached 15 min) ----------
+  // ---------- leagues (SWR cached) ----------
   Future<List<Map<String, dynamic>>> getLeagues() async {
     final key = _cacheKey('/leagues', const {});
 
-    // 1) cache hit
-    final cached = await _cache.get(key);
-    if (cached is List) {
-      return cached.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    final data = await _cache.getSWR<dynamic>(
+      key: key,
+      fetcher: () async => await _api.getJson('/leagues'),
+    );
+
+    if (data is List) {
+      return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
     }
-
-    // 2) fetch
-    try {
-      final data = await _api.getJson('/leagues');
-
-      if (data is List) {
-        await _cache.set(key, data);
-        return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      }
-
-      return const [];
-    } catch (e) {
-      // 3) fallback stale
-      final stale = await _cache.getStale(key);
-      if (stale is List) {
-        return stale.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      }
-      rethrow;
-    }
+    return const [];
   }
 
-  // ---------- fixtures (cached 15 min) ----------
+  // ---------- fixtures (SWR cached) ----------
   /// leagueIds: dacă e listă goală => ALL leagues (nu trimitem league_ids)
   Future<List<Map<String, dynamic>>> getFixtures({
     required List<String> leagueIds,
@@ -92,30 +76,15 @@ class SurePredictService {
 
     final key = _cacheKey('/fixtures', query);
 
-    // 1) cache hit
-    final cached = await _cache.get(key);
-    if (cached is List) {
-      return cached.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    final data = await _cache.getSWR<dynamic>(
+      key: key,
+      fetcher: () async => await _api.getJson('/fixtures', query: query),
+    );
+
+    if (data is List) {
+      return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
     }
-
-    // 2) fetch
-    try {
-      final data = await _api.getJson('/fixtures', query: query);
-
-      if (data is List) {
-        await _cache.set(key, data);
-        return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      }
-
-      return const [];
-    } catch (e) {
-      // 3) fallback stale
-      final stale = await _cache.getStale(key);
-      if (stale is List) {
-        return stale.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      }
-      rethrow;
-    }
+    return const [];
   }
 
   // ---------- prediction (NU cache by default) ----------

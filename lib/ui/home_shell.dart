@@ -56,7 +56,8 @@ class _HomeShellState extends State<HomeShell> {
     widget.favoritesStore.load();
     widget.settingsStore.load();
 
-    if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
+    if (widget.leaguesStore.items.isEmpty &&
+        !widget.leaguesStore.isLoading) {
       widget.leaguesStore.load();
     }
   }
@@ -67,6 +68,7 @@ class _HomeShellState extends State<HomeShell> {
       TopPicksScreen(
         service: widget.service,
         favoritesStore: widget.favoritesStore,
+        settingsStore: widget.settingsStore,
       ),
       FixturesTab(
         service: widget.service,
@@ -99,16 +101,34 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      body: IndexedStack(index: _index, children: pages),
+      body: IndexedStack(
+        index: _index,
+        children: pages,
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.trending_up), label: 'Top'),
-          NavigationDestination(icon: Icon(Icons.sports_soccer), label: 'Fixtures'),
-          NavigationDestination(icon: Icon(Icons.public), label: 'Leagues'),
-          NavigationDestination(icon: Icon(Icons.star), label: 'Favorites'),
-          NavigationDestination(icon: Icon(Icons.settings), label: 'Settings'),
+          NavigationDestination(
+            icon: Icon(Icons.trending_up),
+            label: 'Top',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.sports_soccer),
+            label: 'Fixtures',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.public),
+            label: 'Leagues',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.star),
+            label: 'Favorites',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings),
+            label: 'Settings',
+          ),
         ],
       ),
     );

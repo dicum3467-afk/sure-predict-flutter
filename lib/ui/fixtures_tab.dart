@@ -185,36 +185,29 @@ class _FixturesTabState extends State<FixturesTab> {
             const SizedBox(height: 12),
 
             // Buton: vezi meciuri pentru ligi selectate
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: hasSelection
-                    ? () {
-                        final ids = _selectedLeagueIds.toList();
-                        final names = _selectedLeagueNames.toList();
-                        final title = names.isEmpty ? 'Fixtures' : names.join(', ');
+            onPressed: hasSelection
+    ? () {
+        final ids = _selectedLeagueIds.toList();
 
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => FixturesScreen(
-                              service: widget.service,
-                              leagueIds: ids,
-                              title: title,
-                            ),
-                          ),
-                        );
-                      }
-                    : null,
-                child: Text(
-                  hasSelection
-                      ? 'Vezi meciuri (${_selectedLeagueIds.length} ligi)'
-                      : 'Selectează cel puțin o ligă',
-                ),
-              ),
+        // map id -> name (din store)
+        final Map<String, String> namesById = {};
+        for (final l in widget.leaguesStore.items) {
+          final id = (l['id'] ?? '').toString();
+          final name = (l['name'] ?? '').toString();
+          if (id.isNotEmpty && name.isNotEmpty) {
+            namesById[id] = name;
+          }
+        }
+
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => FixturesScreen(
+              service: widget.service,
+              leagueIds: ids,
+              leagueNamesById: namesById,
+              title: 'Fixtures',
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+          ),
+        );
+      }
+    : null,

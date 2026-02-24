@@ -1,6 +1,7 @@
 import os
 import psycopg2
 
+
 def get_conn():
     """
     Returnează o conexiune psycopg2 folosind DATABASE_URL din env.
@@ -10,16 +11,8 @@ def get_conn():
     if not db_url:
         raise RuntimeError("Missing DATABASE_URL env var")
 
-    # Render uneori folosește postgres:// (psycopg2 preferă postgresql://)
+    # Render uneori dă postgres://; psycopg2 preferă postgresql://
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
 
     return psycopg2.connect(db_url)
-
-# alias pentru cod vechi
-def get_db_connection():
-    return get_conn()
-
-# alias pentru alte fișiere (fixtures_by_league.py)
-def get_db():
-    return get_conn()

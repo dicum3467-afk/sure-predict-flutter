@@ -7,6 +7,7 @@ import '../state/favorites_store.dart';
 import 'fixtures_tab.dart';
 import 'favorites_screen.dart';
 import 'settings_screen.dart';
+import 'top_picks_tab.dart';
 
 import '../state/settings_store.dart';
 import '../state/vip_store.dart';
@@ -43,15 +44,28 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
+      // 0️⃣ Fixtures
       FixturesTab(
         service: widget.service,
         leaguesStore: widget.leaguesStore,
         favoritesStore: widget.favoritesStore,
       ),
+
+      // 1️⃣ ⭐ Top Picks PRO (NOU)
+      TopPicksTab(
+        service: widget.service,
+        leaguesStore: widget.leaguesStore,
+        favoritesStore: widget.favoritesStore,
+        settings: _settingsStore,
+      ),
+
+      // 2️⃣ Favorites
       FavoritesScreen(
         service: widget.service,
         favoritesStore: widget.favoritesStore,
       ),
+
+      // 3️⃣ Settings
       SettingsScreen(
         settings: _settingsStore,
         vipStore: _vipStore,
@@ -67,6 +81,10 @@ class _HomeShellState extends State<HomeShell> {
           NavigationDestination(
             icon: Icon(Icons.sports_soccer),
             label: 'Fixtures',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.trending_up),
+            label: 'Top Picks',
           ),
           NavigationDestination(
             icon: Icon(Icons.star_outline),

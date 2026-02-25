@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 class AdService {
@@ -5,15 +6,34 @@ class AdService {
   static final AdService instance = AdService._();
 
   InterstitialAd? _interstitial;
-  bool _isLoading = false;
+  bool _isLoadingInterstitial = false;
   int _predictionOpens = 0;
 
-  // ⚠️ PUNE ID-URILE TALE REALE AICI
-  static const String bannerId = 'ca-app-pub-2800443504046517/6111381965';
-  static const String interstitialId = 'ca-app-pub-3940256099942544/1033173712';
-  // ↑ momentan test interstitial (sigur). Îl schimbăm când ești gata live.
+  // =========================
+  // ✅ IDs REALE (ale tale)
+  // =========================
+  static const String _realBannerId = 'ca-app-pub-2800443504046517/6111381965';
 
-  // ---------------- INIT ----------------
+  // ❗ Pune aici interstitial-ul REAL când îl creezi în AdMob.
+  // Dacă nu ai încă, lasă gol și va folosi TEST chiar și în release.
+  static const String _realInterstitialId = '';
+
+  // =========================
+  // ✅ IDs TEST (Google)
+  // =========================
+  // Banner test
+  static const String _testBannerId = 'ca-app-pub-3940256099942544/6300978111';
+  // Interstitial test
+  static const String _testInterstitialId = 'ca-app-pub-3940256099942544/1033173712';
+
+  String get bannerId => kReleaseMode ? _realBannerId : _testBannerId;
+
+  String get interstitialId {
+    if (!kReleaseMode) return _testInterstitialId;
+    // în release: dacă nu ai setat încă interstitial real, rămâne test
+    if (_realInterstitialId.trim().isEmpty) return _testInterstitialId;
+    return _realInterstitialId;
+  }
 
   Future<void> init() async {
     await MobileAds.instance.initialize();
@@ -23,9 +43,9 @@ class AdService {
   // ---------------- INTERSTITIAL ----------------
 
   void _loadInterstitial() {
-    if (_isLoading) return;
+    if (_isLoadingInterstitial) return;
 
-    _isLoading = true;
+    _isLoadingInterstitial = true;
 
     InterstitialAd.load(
       adUnitId: interstitialId,
@@ -33,21 +53,21 @@ class AdService {
       adLoadCallback: InterstitialAdLoadCallback(
         onAdLoaded: (ad) {
           _interstitial = ad;
-          _isLoading = false;
+          _isLoadingInterstitial = false;
         },
         onAdFailedToLoad: (_) {
           _interstitial = null;
-          _isLoading = false;
+          _isLoadingInterstitial = false;
         },
       ),
     );
   }
 
-  /// ⭐ LOGICĂ COMERCIALĂ
-  /// arată ad la fiecare 3 deschideri prediction
+  /// ⭐ Arată interstitial la fiecare 3 deschideri Prediction
   void maybeShowPredictionAd() {
     _predictionOpens++;
 
+    // comercial: o dată la 3
     if (_predictionOpens % 3 != 0) return;
 
     if (_interstitial == null) {
@@ -55,15 +75,14 @@ class AdService {
       return;
     }
 
-    _interstitial!.fullScreenContentCallback =
-        FullScreenContentCallback(
-      onAdDismissedFullScreenContent: (_) {
-        _interstitial?.dispose();
+    _interstitial!.fullScreenContentCallback = FullScreenContentCallback(
+      onAdDismissedFullScreenContent: (ad) {
+        ad.dispose();
         _interstitial = null;
         _loadInterstitial();
       },
-      onAdFailedToShowFullScreenContent: (_, __) {
-        _interstitial?.dispose();
+      onAdFailedToShowFullScreenContent: (ad, _) {
+        ad.dispose();
         _interstitial = null;
         _loadInterstitial();
       },

@@ -15,7 +15,8 @@ class SettingsScreen extends StatelessWidget {
   });
 
   Future<void> _clearCache(BuildContext context) async {
-    const cache = SimpleCache(ttl: Duration(minutes: 15));
+    // IMPORTANT: FĂRĂ const (altfel ai eroarea din build)
+    final cache = SimpleCache(ttl: const Duration(minutes: 15));
     await cache.clearAll();
 
     if (context.mounted) {
@@ -56,7 +57,6 @@ class SettingsScreen extends StatelessWidget {
             ),
 
             const SizedBox(height: 16),
-
             SwitchListTile(
               title: const Text('Top picks per league'),
               value: settings.topPerLeague,
@@ -64,7 +64,6 @@ class SettingsScreen extends StatelessWidget {
             ),
 
             const SizedBox(height: 16),
-
             DropdownButtonFormField<String>(
               value: settings.status,
               decoration: const InputDecoration(
@@ -91,19 +90,6 @@ class SettingsScreen extends StatelessWidget {
                 onPressed: vipStore.clear,
                 child: const Text('Clear VIP'),
               ),
-            ),
-
-            const Divider(),
-
-            ListTile(
-              leading: const Icon(Icons.block),
-              title: const Text('Remove Ads (coming soon)'),
-              subtitle: const Text('Subscription / one-time purchase (next update)'),
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Coming soon')),
-                );
-              },
             ),
 
             ListTile(

@@ -1,45 +1,23 @@
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class VipStore extends ChangeNotifier {
-  static const _kVipUntilMs = 'vip:until_ms';
+  DateTime? _vipUntil;
 
-  int? _vipUntilMs;
-
-  Future<void> load() async {
-    final sp = await SharedPreferences.getInstance();
-    _vipUntilMs = sp.getInt(_kVipUntilMs);
-    notifyListeners();
-  }
-
-  bool get isVip {
-    final until = _vipUntilMs;
-    if (until == null) return false;
-    return DateTime.now().millisecondsSinceEpoch < until;
-  }
+  bool get isVip => _vipUntil != null && DateTime.now().isBefore(_vipUntil!);
 
   Duration get remaining {
-    final until = _vipUntilMs;
-    if (until == null) return Duration.zero;
-    final diffMs = until - DateTime.now().millisecondsSinceEpoch;
-    if (diffMs <= 0) return Duration.zero;
-    return Duration(milliseconds: diffMs);
+    if (!isVip) return Duration.zero;
+    return _vipUntil!.difference(DateTime.now());
   }
 
-  Future<void> grant(Duration duration) async {
-    final until = DateTime.now().add(duration).millisecondsSinceEpoch;
-    _vipUntilMs = until;
-
-    final sp = await SharedPreferences.getInstance();
-    await sp.setInt(_kVipUntilMs, until);
-
+  /// Demo: activează VIP 7 zile (pentru test)
+  void activateDemo({Duration duration = const Duration(days: 7)}) {
+    _vipUntil = DateTime.now().add(duration);
     notifyListeners();
   }
 
-  Future<void> clear() async {
-    _vipUntilMs = null;
-    final sp = await SharedPreferences.getInstance();
-    await sp.remove(_kVipUntilMs);
+  void clear() {
+    _vipUntil = null;
     notifyListeners();
   }
 }

@@ -1,24 +1,22 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 
-import '../core/ads/ad_service.dart';
 import '../services/sure_predict_service.dart';
+import '../state/leagues_store.dart';
 import '../state/favorites_store.dart';
 import '../state/settings_store.dart';
-import '../state/vip_store.dart';
 
 class TopPicksScreen extends StatefulWidget {
   final SurePredictService service;
+  final LeaguesStore leaguesStore;
   final FavoritesStore favoritesStore;
-  final SettingsStore settingsStore;
-  final VipStore vipStore;
+  final SettingsStore settings;
 
   const TopPicksScreen({
     super.key,
     required this.service,
+    required this.leaguesStore,
     required this.favoritesStore,
-    required this.settingsStore,
-    required this.vipStore,
+    required this.settings,
   });
 
   @override
@@ -26,878 +24,439 @@ class TopPicksScreen extends StatefulWidget {
 }
 
 class _TopPicksScreenState extends State<TopPicksScreen> {
-  // 🔗 vin din SettingsStore
-  late double _threshold;
-  late String _status;
-  late bool _topPerLeague;
+  late Future<List<Map<String, dynamic>>> _future;
 
-  int _topNPerLeague = 10;
-  int _dayIndex = 0; // 0=today, 1=tomorrow
-  String _runType = 'initial';
+  // interval default
+  String _from = _fmt(DateTime.now());
+  String _to = _fmt(DateTime.now().add(const Duration(days: 7)));
 
-  static const int _pageSize = 80;
-  int _offset = 0;
-  bool _loading = false;
-  bool _loadingMore = false;
-  bool _hasMore = true;
-  String? _error;
-
-  final List<Map<String, dynamic>> _all = [];
-  final Set<String> _seen = {};
-  final ScrollController _scroll = ScrollController();
-
-  Timer? _timer;
-  CacheInfo? _cacheInfo;
+  // filtre PRO
+  double _threshold = 0.62; // probabilitate minimă recomandată
+  int _maxPicks = 30;
+  bool _groupByLeague = true;
+  bool _preferO25 = true; // preferă O2.5 dacă e “mai bun” ca 1X2
+  String _status = 'scheduled'; // scheduled / live / finished / all
+  bool _force = false;
 
   @override
   void initState() {
     super.initState();
-
-    widget.favoritesStore.load();
-    widget.vipStore.load();
-
-    _threshold = widget.settingsStore.threshold;
-    _status = widget.settingsStore.status;
-    _topPerLeague = widget.settingsStore.topPerLeague;
-
-    widget.settingsStore.addListener(_onSettingsChanged);
-
-    _loadInitial();
-
-    _scroll.addListener(() {
-      if (_scroll.position.pixels >= _scroll.position.maxScrollExtent - 240) {
-        _loadMore();
-      }
-    });
+    if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
+      widget.leaguesStore.load();
+    }
+    _future = _load();
   }
 
-  @override
-  void dispose() {
-    widget.settingsStore.removeListener(_onSettingsChanged);
-    _timer?.cancel();
-    _scroll.dispose();
-    super.dispose();
+  Future<List<Map<String, dynamic>>> _load() async {
+    final leagueIds = widget.leaguesStore.items
+        .map((e) => (e['id'] ?? '').toString())
+        .where((id) => id.isNotEmpty)
+        .toList();
+
+    // dacă nu sunt ligi încărcate, încercăm oricum (service poate returna ceva)
+    return widget.service.getTopPicksPro(
+      leagueIds: leagueIds,
+      from: _from,
+      to: _to,
+      status: _status == 'all' ? null : _status,
+      runType: 'initial',
+      threshold: _threshold,
+      maxPicks: _maxPicks,
+      preferOver25: _preferO25,
+      force: _force,
+    );
   }
 
-  void _onSettingsChanged() {
-    final s = widget.settingsStore;
-    final changed = (_threshold != s.threshold) || (_status != s.status) || (_topPerLeague != s.topPerLeague);
-    if (!changed) return;
-
+  void _refresh({bool force = false}) {
     setState(() {
-      _threshold = s.threshold;
-      _status = s.status;
-      _topPerLeague = s.topPerLeague;
+      _force = force;
+      _future = _load();
     });
   }
 
-  DateTime _today() {
-    final now = DateTime.now();
-    return DateTime(now.year, now.month, now.day);
-  }
-
-  String _fmtDate(DateTime d) {
+  static String _fmt(DateTime d) {
     final y = d.year.toString().padLeft(4, '0');
     final m = d.month.toString().padLeft(2, '0');
     final day = d.day.toString().padLeft(2, '0');
     return '$y-$m-$day';
   }
 
-  ({String from, String to, String label}) _rangeForIndex(int idx) {
-    final base = _today();
-    final day = base.add(Duration(days: idx));
-    return (from: _fmtDate(day), to: _fmtDate(day), label: idx == 0 ? 'Today' : 'Tomorrow');
-  }
-
-  double _num(dynamic v) {
-    if (v == null) return 0.0;
-    if (v is num) return v.toDouble();
-    return double.tryParse(v.toString()) ?? 0.0;
-  }
-
-  String _fmtPct(double p) => '${(p * 100).toStringAsFixed(0)}%';
-
-  String _keyOf(Map<String, dynamic> it) {
-    final pf = (it['provider_fixture_id'] ?? '').toString();
-    if (pf.isNotEmpty) return 'pf:$pf';
-    final id = (it['id'] ?? '').toString();
-    if (id.isNotEmpty) return 'id:$id';
-    final lg = (it['league_id'] ?? '').toString();
-    final ko = (it['kickoff_at'] ?? it['kickoff'] ?? '').toString();
-    final h = (it['home'] ?? '').toString();
-    final a = (it['away'] ?? '').toString();
-    return '$lg|$ko|$h|$a';
-  }
-
-  bool _isLiveStatus(String s) {
-    final x = s.toLowerCase().trim();
-    return x == 'live' || x == 'inplay' || x == 'playing';
-  }
-
-  bool _statusMatches(Map<String, dynamic> it) {
-    if (_status == 'all') return true;
-    final st = (it['status'] ?? '').toString().toLowerCase().trim();
-    if (_status == 'live') return _isLiveStatus(st);
-    return st == _status;
-  }
-
-  DateTime _parseKickoff(Map<String, dynamic> it) {
-    final s = (it['kickoff_at'] ?? it['kickoff'] ?? '').toString();
-    return DateTime.tryParse(s) ?? DateTime.fromMillisecondsSinceEpoch(0);
-  }
-
-  int _statusRank(Map<String, dynamic> it) {
-    final st = (it['status'] ?? '').toString();
-    if (_isLiveStatus(st)) return 0;
-    if (st.toLowerCase() == 'scheduled') return 1;
-    if (st.toLowerCase() == 'finished') return 2;
-    return 9;
-  }
-
-  ({String label, double p}) _bestPick(Map<String, dynamic> it) {
-    final pHome = _num(it['p_home']);
-    final pDraw = _num(it['p_draw']);
-    final pAway = _num(it['p_away']);
-    final pOver = _num(it['p_over25']);
-    final pUnder = _num(it['p_under25']);
-
-    final candidates = <String, double>{
-      '1': pHome,
-      'X': pDraw,
-      '2': pAway,
-      'O2.5': pOver,
-      'U2.5': pUnder,
-    };
-
-    String bestLabel = '—';
-    double best = 0.0;
-    candidates.forEach((k, v) {
-      if (v > best) {
-        best = v;
-        bestLabel = k;
-      }
-    });
-
-    return (label: bestLabel, p: best);
-  }
-
-  Color _confidenceBg(BuildContext context, double p) {
-    final cs = Theme.of(context).colorScheme;
-    if (p >= 0.70) return cs.tertiaryContainer;
-    if (p >= 0.60) return cs.secondaryContainer;
-    return cs.surfaceContainerHighest;
-  }
-
-  Color _confidenceFg(BuildContext context, double p) {
-    final cs = Theme.of(context).colorScheme;
-    if (p >= 0.70) return cs.onTertiaryContainer;
-    if (p >= 0.60) return cs.onSecondaryContainer;
-    return cs.onSurfaceVariant;
-  }
-
-  bool _hasLiveInList(List<Map<String, dynamic>> list) {
-    for (final it in list) {
-      if (_isLiveStatus((it['status'] ?? '').toString())) return true;
+  String _leagueName(String leagueId) {
+    for (final l in widget.leaguesStore.items) {
+      final id = (l['id'] ?? '').toString();
+      if (id == leagueId) return (l['name'] ?? leagueId).toString();
     }
-    return false;
+    return leagueId;
   }
 
-  void _startOrStopTimer(List<Map<String, dynamic>> top) {
-    _timer?.cancel();
-    _timer = null;
-
-    if (!_hasLiveInList(top)) return;
-
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) async {
-      if (!mounted) return;
-      await _refreshSoft();
-      await _refreshCacheInfo();
-      setState(() {});
-    });
+  String _fmtPct(dynamic v) {
+    if (v == null) return '-';
+    final n = v is num ? v.toDouble() : double.tryParse(v.toString());
+    if (n == null) return '-';
+    return '${(n * 100).toStringAsFixed(0)}%';
   }
 
-  Future<void> _refreshCacheInfo() async {
-    final r = _rangeForIndex(_dayIndex);
-    _cacheInfo = await widget.service.fixturesCacheInfo(
-      leagueIds: const [],
-      from: r.from,
-      to: r.to,
-      limit: _pageSize,
-      offset: 0,
-      runType: _runType,
-    );
+  Color _badgeColor(double score, ColorScheme cs) {
+    if (score >= 0.30) return Colors.green;
+    if (score >= 0.20) return Colors.lightGreen;
+    if (score >= 0.14) return Colors.orange;
+    return cs.outline;
   }
 
-  Future<void> _loadInitial() async {
-    final r = _rangeForIndex(_dayIndex);
-
-    setState(() {
-      _loading = true;
-      _loadingMore = false;
-      _hasMore = true;
-      _offset = 0;
-      _error = null;
-      _all.clear();
-      _seen.clear();
-    });
-
-    try {
-      await _refreshCacheInfo();
-
-      final page = await widget.service.getFixtures(
-        leagueIds: const [],
-        from: r.from,
-        to: r.to,
-        limit: _pageSize,
-        offset: 0,
-        runType: _runType,
-      );
-
-      for (final it in page) {
-        final k = _keyOf(it);
-        if (_seen.add(k)) _all.add(it);
-      }
-
-      setState(() {
-        _offset = page.length;
-        _hasMore = page.length == _pageSize;
-      });
-    } catch (e) {
-      setState(() => _error = e.toString());
-    } finally {
-      setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _loadMore() async {
-    if (_loading || _loadingMore || !_hasMore) return;
-
-    final r = _rangeForIndex(_dayIndex);
-
-    setState(() {
-      _loadingMore = true;
-      _error = null;
-    });
-
-    try {
-      final page = await widget.service.getFixtures(
-        leagueIds: const [],
-        from: r.from,
-        to: r.to,
-        limit: _pageSize,
-        offset: _offset,
-        runType: _runType,
-      );
-
-      for (final it in page) {
-        final k = _keyOf(it);
-        if (_seen.add(k)) _all.add(it);
-      }
-
-      setState(() {
-        _offset += page.length;
-        _hasMore = page.length == _pageSize;
-      });
-    } catch (e) {
-      setState(() => _error = e.toString());
-    } finally {
-      setState(() => _loadingMore = false);
-    }
-  }
-
-  Future<void> _refreshSoft() async {
-    final r = _rangeForIndex(_dayIndex);
-    final want = _all.length.clamp(80, 160);
-
-    try {
-      final page = await widget.service.getFixtures(
-        leagueIds: const [],
-        from: r.from,
-        to: r.to,
-        limit: want,
-        offset: 0,
-        runType: _runType,
-      );
-
-      _all.clear();
-      _seen.clear();
-      for (final it in page) {
-        final k = _keyOf(it);
-        if (_seen.add(k)) _all.add(it);
-      }
-
-      setState(() {
-        _offset = page.length;
-        _hasMore = page.length == want;
-      });
-    } catch (_) {}
-  }
-
-  Future<void> _refreshHard() async => _loadInitial();
-
-  List<Map<String, dynamic>> _buildTopPicks() {
-    final filtered = _all.where(_statusMatches).toList();
-
-    final List<Map<String, dynamic>> picks = [];
-    for (final it in filtered) {
-      final best = _bestPick(it);
-      if (best.p >= _threshold) {
-        final copy = Map<String, dynamic>.from(it);
-        copy['_best_label'] = best.label;
-        copy['_best_p'] = best.p;
-        picks.add(copy);
-      }
-    }
-
-    picks.sort((a, b) {
-      final ra = _statusRank(a);
-      final rb = _statusRank(b);
-      if (ra != rb) return ra.compareTo(rb);
-
-      final pa = (a['_best_p'] as double?) ?? 0.0;
-      final pb = (b['_best_p'] as double?) ?? 0.0;
-      if (pa != pb) return pb.compareTo(pa);
-
-      return _parseKickoff(a).compareTo(_parseKickoff(b));
-    });
-
-    if (_topPerLeague) {
-      final out = <Map<String, dynamic>>[];
-      final byLeague = <String, List<Map<String, dynamic>>>{};
-
-      for (final it in picks) {
-        final leagueId = (it['league_id'] ?? '').toString();
-        byLeague.putIfAbsent(leagueId, () => []).add(it);
-      }
-
-      byLeague.forEach((_, list) {
-        out.addAll(list.take(_topNPerLeague));
-      });
-
-      out.sort((a, b) {
-        final ra = _statusRank(a);
-        final rb = _statusRank(b);
-        if (ra != rb) return ra.compareTo(rb);
-
-        final pa = (a['_best_p'] as double?) ?? 0.0;
-        final pb = (b['_best_p'] as double?) ?? 0.0;
-        if (pa != pb) return pb.compareTo(pa);
-
-        return _parseKickoff(a).compareTo(_parseKickoff(b));
-      });
-
-      return out;
-    }
-
-    return picks;
-  }
-
-  String _cacheBadgeText() {
-    final info = _cacheInfo;
-    if (info == null || info.ageSeconds == null) return 'No cache';
-    final sec = info.ageSeconds!;
-    final min = (sec / 60).floor();
-
-    if (info.isFresh) {
-      if (min <= 0) return 'Updated just now';
-      return 'Updated ${min}m ago';
-    } else {
-      if (min <= 0) return 'Cached (stale)';
-      return 'Cached (stale) · ${min}m';
-    }
-  }
-
-  Color _cacheBadgeBg(BuildContext context) {
-    final info = _cacheInfo;
-    final cs = Theme.of(context).colorScheme;
-    if (info == null) return cs.surfaceContainerHighest;
-    return info.isFresh ? cs.primaryContainer : cs.surfaceContainerHighest;
-  }
-
-  Color _cacheBadgeFg(BuildContext context) {
-    final info = _cacheInfo;
-    final cs = Theme.of(context).colorScheme;
-    if (info == null) return cs.onSurfaceVariant;
-    return info.isFresh ? cs.onPrimaryContainer : cs.onSurfaceVariant;
-  }
-
-  // VIP exact score (heuristic “beta”)
-  String _vipExactScoreSuggestion({
-    required double pHome,
-    required double pDraw,
-    required double pAway,
-    required double pOver,
-    required double pUnder,
-  }) {
-    final winner = (pHome >= pDraw && pHome >= pAway)
-        ? 'H'
-        : (pAway >= pHome && pAway >= pDraw)
-            ? 'A'
-            : 'D';
-
-    final goalsHigh = pOver >= pUnder;
-
-    if (winner == 'D') return goalsHigh ? '2-2' : '1-1';
-    if (winner == 'H') return goalsHigh ? '2-1' : '1-0';
-    return goalsHigh ? '1-2' : '0-1';
-  }
-
-  Widget _vipChip(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: cs.tertiaryContainer,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        'VIP 👑',
-        style: TextStyle(
-          color: cs.onTertiaryContainer,
-          fontWeight: FontWeight.w900,
-        ),
-      ),
-    );
-  }
-
-  String _vipRemainingText() {
-    final d = widget.vipStore.remaining;
-    if (d == Duration.zero) return 'VIP inactive';
-    final m = d.inMinutes;
-    final s = d.inSeconds % 60;
-    if (m <= 0) return 'VIP ${s}s left';
-    return 'VIP ${m}m ${s}s left';
-  }
-
-  void _openPrediction(BuildContext context, Map<String, dynamic> item) {
-    // Interstitial (la fiecare 3 deschideri)
-    AdService.instance.maybeShowPredictionAd();
-
-    final providerId = (item['provider_fixture_id'] ?? '').toString();
-    if (providerId.isEmpty) return;
-
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (_) {
-        return AnimatedBuilder(
-          animation: widget.vipStore,
-          builder: (context, __) {
-            final vip = widget.vipStore.isVip;
-
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: FutureBuilder<Map<String, dynamic>>(
-                  future: widget.service.getPrediction(providerFixtureId: providerId),
-                  builder: (context, snap) {
-                    if (snap.connectionState == ConnectionState.waiting) {
-                      return const SizedBox(height: 240, child: Center(child: CircularProgressIndicator()));
-                    }
-                    if (snap.hasError) {
-                      return SizedBox(height: 240, child: Center(child: Text('Eroare: ${snap.error}')));
-                    }
-
-                    final pred = snap.data ?? <String, dynamic>{};
-
-                    String fmt(dynamic v) {
-                      final n = v is num ? v.toDouble() : double.tryParse(v.toString());
-                      if (n == null) return '-';
-                      return '${(n * 100).toStringAsFixed(0)}%';
-                    }
-
-                    final pHome = _num(pred['p_home'] ?? item['p_home']);
-                    final pDraw = _num(pred['p_draw'] ?? item['p_draw']);
-                    final pAway = _num(pred['p_away'] ?? item['p_away']);
-                    final pOver = _num(pred['p_over25'] ?? item['p_over25']);
-                    final pUnder = _num(pred['p_under25'] ?? item['p_under25']);
-
-                    final home = (item['home'] ?? '').toString();
-                    final away = (item['away'] ?? '').toString();
-
-                    final bestLabel = (item['_best_label'] ?? '').toString();
-                    final bestP = (item['_best_p'] is double) ? (item['_best_p'] as double) : _num(item['_best_p']);
-
-                    final vipScore = _vipExactScoreSuggestion(
-                      pHome: pHome,
-                      pDraw: pDraw,
-                      pAway: pAway,
-                      pOver: pOver,
-                      pUnder: pUnder,
-                    );
-
-                    return SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text('$home vs $away', style: Theme.of(context).textTheme.titleLarge),
-                              ),
-                              if (vip) _vipChip(context),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Text(_vipRemainingText(), style: Theme.of(context).textTheme.bodySmall),
-                          const SizedBox(height: 10),
-
-                          if (bestLabel.isNotEmpty)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: _confidenceBg(context, bestP),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                'BEST $bestLabel ${_fmtPct(bestP)}',
-                                style: TextStyle(
-                                  color: _confidenceFg(context, bestP),
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-
-                          const SizedBox(height: 14),
-                          _PredRow(label: '1 (Home)', value: fmt(pHome)),
-                          _PredRow(label: 'X (Draw)', value: fmt(pDraw)),
-                          _PredRow(label: '2 (Away)', value: fmt(pAway)),
-                          const Divider(height: 24),
-                          _PredRow(label: 'Over 2.5', value: fmt(pOver)),
-                          _PredRow(label: 'Under 2.5', value: fmt(pUnder)),
-
-                          const SizedBox(height: 16),
-
-                          if (!vip)
-                            FilledButton.icon(
-                              onPressed: () async {
-                                final ok = await AdService.instance.showRewarded();
-                                if (!context.mounted) return;
-
-                                if (ok) {
-                                  await widget.vipStore.grant(const Duration(minutes: 30));
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('VIP unlocked for 30 minutes!')),
-                                  );
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Ad not ready. Try again.')),
-                                  );
-                                }
-                              },
-                              icon: const Icon(Icons.lock_open),
-                              label: const Text('Unlock VIP (Rewarded Ad)'),
-                            )
-                          else
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(16),
-                                color: Theme.of(context).colorScheme.tertiaryContainer,
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'VIP • Exact Score (beta)',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w900,
-                                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    vipScore,
-                                    style: TextStyle(
-                                      fontSize: 28,
-                                      fontWeight: FontWeight.w900,
-                                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    'VIP Tip: folosește acest score ca “lean”, nu ca garanție.',
-                                    style: TextStyle(
-                                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                          const SizedBox(height: 10),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
+  String _badgeText(double score) {
+    if (score >= 0.30) return 'HOT';
+    if (score >= 0.20) return 'PRO';
+    if (score >= 0.14) return 'OK';
+    return 'LOW';
   }
 
   @override
   Widget build(BuildContext context) {
-    final r = _rangeForIndex(_dayIndex);
-    final top = _buildTopPicks();
+    final cs = Theme.of(context).colorScheme;
 
-    WidgetsBinding.instance.addPostFrameCallback((_) => _startOrStopTimer(top));
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Top Picks PRO'),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh (cache)',
+            onPressed: () => _refresh(force: false),
+            icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            tooltip: 'Force refresh (ignora cache)',
+            onPressed: () => _refresh(force: true),
+            icon: const Icon(Icons.sync),
+          ),
+        ],
+      ),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snap.hasError) {
+            return Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('Eroare: ${snap.error}'),
+            );
+          }
 
-    return AnimatedBuilder(
-      animation: Listenable.merge([widget.favoritesStore, widget.settingsStore, widget.vipStore]),
-      builder: (context, _) {
-        if (_loading) return const Center(child: CircularProgressIndicator());
+          final data = snap.data ?? [];
+          if (data.isEmpty) {
+            return _filtersPanel(
+              context,
+              below: const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: Text('Nu există Top Picks pentru filtrele curente.')),
+              ),
+            );
+          }
 
-        if (_error != null) {
-          return Center(
+          // group by league dacă e setat
+          final grouped = <String, List<Map<String, dynamic>>>{};
+          for (final it in data) {
+            final leagueId = (it['league_id'] ?? 'unknown').toString();
+            grouped.putIfAbsent(leagueId, () => []).add(it);
+          }
+
+          // sort ligi după nume
+          final leagueIds = grouped.keys.toList()
+            ..sort((a, b) => _leagueName(a).compareTo(_leagueName(b)));
+
+          final list = _groupByLeague
+              ? ListView.builder(
+                  itemCount: leagueIds.length,
+                  itemBuilder: (context, idx) {
+                    final leagueId = leagueIds[idx];
+                    final items = grouped[leagueId] ?? [];
+                    return _leagueSection(context, leagueId, items);
+                  },
+                )
+              : ListView.separated(
+                  itemCount: data.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, i) => _pickTile(context, data[i]),
+                );
+
+          return _filtersPanel(context, below: Expanded(child: list));
+        },
+      ),
+    );
+  }
+
+  Widget _filtersPanel(BuildContext context, {required Widget below}) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Column(
+      children: [
+        // panel filtre
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest,
+            border: Border(bottom: BorderSide(color: cs.outlineVariant)),
+          ),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: _DateField(
+                      label: 'From',
+                      value: _from,
+                      onChanged: (v) => setState(() => _from = v),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _DateField(
+                      label: 'To',
+                      value: _to,
+                      onChanged: (v) => setState(() => _to = v),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      value: _status,
+                      decoration: const InputDecoration(
+                        labelText: 'Status',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'scheduled', child: Text('Scheduled')),
+                        DropdownMenuItem(value: 'live', child: Text('Live')),
+                        DropdownMenuItem(value: 'finished', child: Text('Finished')),
+                        DropdownMenuItem(value: 'all', child: Text('All')),
+                      ],
+                      onChanged: (v) => setState(() => _status = v ?? 'scheduled'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: DropdownButtonFormField<int>(
+                      value: _maxPicks,
+                      decoration: const InputDecoration(
+                        labelText: 'Max picks',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 10, child: Text('10')),
+                        DropdownMenuItem(value: 20, child: Text('20')),
+                        DropdownMenuItem(value: 30, child: Text('30')),
+                        DropdownMenuItem(value: 50, child: Text('50')),
+                      ],
+                      onChanged: (v) => setState(() => _maxPicks = v ?? 30),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 10),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Threshold: ${(_threshold * 100).toStringAsFixed(0)}%'),
+                        Slider(
+                          value: _threshold,
+                          min: 0.55,
+                          max: 0.80,
+                          divisions: 25,
+                          onChanged: (v) => setState(() => _threshold = v),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Group by league'),
+                      value: _groupByLeague,
+                      onChanged: (v) => setState(() => _groupByLeague = v),
+                    ),
+                  ),
+                  Expanded(
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Prefer Over 2.5'),
+                      value: _preferO25,
+                      onChanged: (v) => setState(() => _preferO25 = v),
+                    ),
+                  ),
+                ],
+              ),
+
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.icon(
+                  onPressed: () => _refresh(force: false),
+                  icon: const Icon(Icons.trending_up),
+                  label: const Text('Recompute'),
+                ),
+              )
+            ],
+          ),
+        ),
+
+        // content
+        Expanded(child: below),
+      ],
+    );
+  }
+
+  Widget _leagueSection(BuildContext context, String leagueId, List<Map<String, dynamic>> items) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          color: cs.surfaceContainerHighest,
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _leagueName(leagueId),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              Text('${items.length}'),
+            ],
+          ),
+        ),
+        ...items.map((it) => Column(
+              children: [
+                _pickTile(context, it),
+                const Divider(height: 1),
+              ],
+            )),
+      ],
+    );
+  }
+
+  Widget _pickTile(BuildContext context, Map<String, dynamic> it) {
+    final cs = Theme.of(context).colorScheme;
+
+    final home = (it['home'] ?? '').toString();
+    final away = (it['away'] ?? '').toString();
+    final kickoff = (it['kickoff_at'] ?? it['kickoff'] ?? '').toString();
+    final status = (it['status'] ?? '').toString();
+
+    final market = (it['_pick_market'] ?? '').toString(); // ex: "1", "X", "2", "O2.5", "U2.5"
+    final pickProb = (it['_pick_prob'] is num)
+        ? (it['_pick_prob'] as num).toDouble()
+        : double.tryParse((it['_pick_prob'] ?? '').toString()) ?? 0.0;
+
+    final score = (it['_pick_score'] is num)
+        ? (it['_pick_score'] as num).toDouble()
+        : double.tryParse((it['_pick_score'] ?? '').toString()) ?? 0.0;
+
+    final p1 = it['p_home'];
+    final px = it['p_draw'];
+    final p2 = it['p_away'];
+    final po = it['p_over25'];
+    final pu = it['p_under25'];
+
+    final badge = _badgeText(score);
+
+    return ListTile(
+      title: Text('$home vs $away'),
+      subtitle: Text('Status: $status\nKickoff: $kickoff'),
+      trailing: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Chip(
+            label: Text('$market • ${_fmtPct(pickProb)}'),
+            backgroundColor: _badgeColor(score, cs).withOpacity(0.12),
+            side: BorderSide(color: _badgeColor(score, cs)),
+          ),
+          const SizedBox(height: 6),
+          Text(badge, style: TextStyle(color: _badgeColor(score, cs), fontWeight: FontWeight.w700)),
+        ],
+      ),
+      onTap: () {
+        // simplu: bottom sheet cu detalii probabilități
+        showModalBottomSheet(
+          context: context,
+          showDragHandle: true,
+          builder: (_) => SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Eroare: $_error'),
-                  const SizedBox(height: 12),
-                  FilledButton(onPressed: _refreshHard, child: const Text('Retry')),
-                ],
-              ),
-            ),
-          );
-        }
-
-        final vip = widget.vipStore.isVip;
-
-        return Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text('Top Picks • ${r.label}', style: Theme.of(context).textTheme.titleLarge),
-                      ),
-                      if (vip) ...[
-                        _vipChip(context),
-                        const SizedBox(width: 8),
-                      ],
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: _cacheBadgeBg(context),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          _cacheBadgeText(),
-                          style: TextStyle(color: _cacheBadgeFg(context), fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(icon: const Icon(Icons.refresh), onPressed: _refreshHard),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-
-                  SegmentedButton<int>(
-                    segments: const [
-                      ButtonSegment(value: 0, label: Text('Today')),
-                      ButtonSegment(value: 1, label: Text('Tomorrow')),
-                    ],
-                    selected: {_dayIndex},
-                    onSelectionChanged: (s) async {
-                      setState(() => _dayIndex = s.first);
-                      await _loadInitial();
-                    },
-                  ),
-
+                  Text('$home vs $away', style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 10),
-
-                  Row(
-                    children: [
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          value: _status,
-                          decoration: const InputDecoration(labelText: 'Status', border: OutlineInputBorder()),
-                          items: const [
-                            DropdownMenuItem(value: 'all', child: Text('All')),
-                            DropdownMenuItem(value: 'scheduled', child: Text('Scheduled')),
-                            DropdownMenuItem(value: 'live', child: Text('Live')),
-                            DropdownMenuItem(value: 'finished', child: Text('Finished')),
-                          ],
-                          onChanged: (v) async {
-                            final nv = v ?? 'all';
-                            setState(() => _status = nv);
-                            await widget.settingsStore.setStatus(nv);
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: SwitchListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: const Text('Top/league'),
-                          value: _topPerLeague,
-                          onChanged: (v) async {
-                            setState(() => _topPerLeague = v);
-                            await widget.settingsStore.setTopPerLeague(v);
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  if (_topPerLeague)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Row(
-                        children: [
-                          const Text('N:'),
-                          const SizedBox(width: 10),
-                          DropdownButton<int>(
-                            value: _topNPerLeague,
-                            items: const [
-                              DropdownMenuItem(value: 5, child: Text('5')),
-                              DropdownMenuItem(value: 10, child: Text('10')),
-                              DropdownMenuItem(value: 15, child: Text('15')),
-                            ],
-                            onChanged: (v) => setState(() => _topNPerLeague = v ?? 10),
-                          ),
-                          const Spacer(),
-                          Text('Fixtures: ${_all.length} • Picks: ${top.length}'),
-                        ],
-                      ),
-                    )
-                  else
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text('Fixtures: ${_all.length} • Picks: ${top.length}'),
-                    ),
-
-                  const SizedBox(height: 8),
-
-                  Text('Prag: ${(100 * _threshold).toStringAsFixed(0)}%'),
-                  Slider(
-                    value: _threshold,
-                    min: 0.55,
-                    max: 0.80,
-                    divisions: 25,
-                    label: '${(100 * _threshold).toStringAsFixed(0)}%',
-                    onChanged: (v) async {
-                      setState(() => _threshold = v);
-                      await widget.settingsStore.setThreshold(v);
-                    },
-                  ),
+                  _row('Pick', '$market • ${_fmtPct(pickProb)}'),
+                  _row('Score', score.toStringAsFixed(3)),
+                  const Divider(height: 24),
+                  _row('1 (Home)', _fmtPct(p1)),
+                  _row('X (Draw)', _fmtPct(px)),
+                  _row('2 (Away)', _fmtPct(p2)),
+                  const Divider(height: 24),
+                  _row('Over 2.5', _fmtPct(po)),
+                  _row('Under 2.5', _fmtPct(pu)),
                 ],
               ),
             ),
-
-            Expanded(
-              child: RefreshIndicator(
-                onRefresh: _refreshHard,
-                child: ListView.builder(
-                  controller: _scroll,
-                  itemCount: top.length + 1,
-                  itemBuilder: (context, idx) {
-                    if (idx == top.length) {
-                      if (_loadingMore) {
-                        return const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Center(child: CircularProgressIndicator()),
-                        );
-                      }
-                      if (_hasMore) {
-                        return const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Center(child: Text('Scroll pentru mai multe fixtures…')),
-                        );
-                      }
-                      return const Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Center(child: Text('Gata.')),
-                      );
-                    }
-
-                    final it = top[idx];
-
-                    final home = (it['home'] ?? '').toString();
-                    final away = (it['away'] ?? '').toString();
-                    final status = (it['status'] ?? '').toString();
-                    final kickoff = (it['kickoff_at'] ?? it['kickoff'] ?? '').toString();
-                    final leagueId = (it['league_id'] ?? '').toString();
-
-                    final bestLabel = (it['_best_label'] ?? '—').toString();
-                    final bestP = (it['_best_p'] is double) ? (it['_best_p'] as double) : _num(it['_best_p']);
-
-                    final fav = widget.favoritesStore.isFavorite(it);
-
-                    return Column(
-                      children: [
-                        ListTile(
-                          leading: IconButton(
-                            icon: Icon(fav ? Icons.star : Icons.star_border),
-                            color: fav ? Colors.amber : null,
-                            onPressed: () => widget.favoritesStore.toggle(it),
-                          ),
-                          title: Row(
-                            children: [
-                              Expanded(child: Text('$home vs $away')),
-                              if (vip) _vipChip(context),
-                            ],
-                          ),
-                          subtitle: Text('League: $leagueId\nStatus: $status • Kickoff: $kickoff'),
-                          isThreeLine: true,
-                          trailing: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: _confidenceBg(context, bestP),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              'BEST $bestLabel ${_fmtPct(bestP)}',
-                              style: TextStyle(
-                                color: _confidenceFg(context, bestP),
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          onTap: () => _openPrediction(context, it),
-                        ),
-                        const Divider(height: 1),
-                      ],
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
+          ),
         );
       },
     );
   }
+
+  Widget _row(String a, String b) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(child: Text(a)),
+          Text(b, style: const TextStyle(fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
 }
 
-class _PredRow extends StatelessWidget {
+class _DateField extends StatelessWidget {
   final String label;
   final String value;
+  final ValueChanged<String> onChanged;
 
-  const _PredRow({required this.label, required this.value});
+  const _DateField({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Expanded(child: Text(label)),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w700)),
-        ],
+    return TextFormField(
+      initialValue: value,
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+        hintText: 'YYYY-MM-DD',
       ),
+      onChanged: onChanged,
     );
   }
 }

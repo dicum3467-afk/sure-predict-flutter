@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import '../api/api_client.dart';
+import 'api_client.dart';
 import '../core/cache/simple_cache.dart';
 
 class CacheInfo {

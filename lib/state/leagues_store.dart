@@ -34,7 +34,7 @@ class LeaguesStore extends ChangeNotifier {
       error = null;
       notifyListeners();
 
-      final data = await _service.getLeagues(force: force);
+      final data = await _service.getLeagues();
 
       // 🔥 sortare PRO: country -> tier -> name
       data.sort((a, b) {

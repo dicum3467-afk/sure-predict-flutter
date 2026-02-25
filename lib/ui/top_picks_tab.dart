@@ -1,21 +1,19 @@
+// lib/ui/top_picks_tab.dart
 import 'package:flutter/material.dart';
 
 import '../services/sure_predict_service.dart';
 import '../state/leagues_store.dart';
-import '../state/favorites_store.dart';
 import '../state/settings_store.dart';
 
 class TopPicksTab extends StatefulWidget {
   final SurePredictService service;
   final LeaguesStore leaguesStore;
-  final FavoritesStore favoritesStore;
   final SettingsStore settings;
 
   const TopPicksTab({
     super.key,
     required this.service,
     required this.leaguesStore,
-    required this.favoritesStore,
     required this.settings,
   });
 
@@ -26,163 +24,73 @@ class TopPicksTab extends StatefulWidget {
 class _TopPicksTabState extends State<TopPicksTab> {
   late Future<List<Map<String, dynamic>>> _future;
 
-  String _from = _fmtDate(DateTime.now());
-  String _to = _fmtDate(DateTime.now().add(const Duration(days: 7)));
-  String _runType = 'initial';
-
-  // FREE limit (MAX MONEY)
-  static const int _freeLimit = 5;
-  bool _vip = false; // toggle demo (poți lega de VipStore dacă vrei în HomeShell)
+  // interval default (poți schimba în UI dacă vrei)
+  String _from = _todayIso();
+  String _to = _todayPlusDaysIso(3);
 
   @override
   void initState() {
     super.initState();
     _future = _load();
+
+    // re-render când se schimbă settings
+    widget.settings.addListener(_onSettingsChanged);
   }
 
-  static String _fmtDate(DateTime d) {
-    final y = d.year.toString().padLeft(4, '0');
-    final m = d.month.toString().padLeft(2, '0');
-    final day = d.day.toString().padLeft(2, '0');
-    return '$y-$m-$day';
+  @override
+  void dispose() {
+    widget.settings.removeListener(_onSettingsChanged);
+    super.dispose();
+  }
+
+  void _onSettingsChanged() {
+    setState(() {});
+  }
+
+  static String _todayIso() {
+    final now = DateTime.now();
+    final d = DateTime(now.year, now.month, now.day);
+    return d.toIso8601String().substring(0, 10);
+  }
+
+  static String _todayPlusDaysIso(int days) {
+    final now = DateTime.now().add(Duration(days: days));
+    final d = DateTime(now.year, now.month, now.day);
+    return d.toIso8601String().substring(0, 10);
   }
 
   Future<List<Map<String, dynamic>>> _load() async {
-    // ia toate ligile disponibile
-    final leagues = widget.leaguesStore.items;
-    final leagueIds = leagues
-        .map((e) => (e['id'] ?? '').toString())
+    // asigură leagues (pentru nume)
+    if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
+      await widget.leaguesStore.load();
+    }
+
+    // “din toate ligile” = toate league ids din store
+    final leagueIds = widget.leaguesStore.items
+        .map((l) => (l['id'] ?? '').toString())
         .where((id) => id.isNotEmpty)
         .toList();
 
-    // status default din Settings (all / scheduled / live / finished)
-    final status = widget.settings.status;
+    // dacă nu sunt ligi încă, return gol
+    if (leagueIds.isEmpty) return <Map<String, dynamic>>[];
 
-    // 👇 ajustează AICI dacă semnătura ta e diferită
-    final data = await widget.service.getFixtures(
+    return widget.service.getFixtures(
       leagueIds: leagueIds,
       from: _from,
       to: _to,
-      limit: 400,
+      limit: 250,
       offset: 0,
-      runType: _runType,
-      status: status == 'all' ? null : status,
+      runType: 'top_picks',
+      useCache: true,
     );
-
-    // normalizează la List<Map<String,dynamic>>
-    final items = data.cast<Map<String, dynamic>>();
-
-    // calculează picks + scor
-    final threshold = widget.settings.threshold; // ex 0.65
-    final picks = <Map<String, dynamic>>[];
-
-    for (final it in items) {
-      final pHome = _toDouble(it['p_home']);
-      final pDraw = _toDouble(it['p_draw']);
-      final pAway = _toDouble(it['p_away']);
-
-      final best = _bestMarket(pHome, pDraw, pAway);
-      final bestP = best.$2;
-
-      if (bestP < threshold) continue; // filtrul PRO
-
-      final odds = _extractOdds(it); // value bets if odds exist
-      final ev = _expectedValue(bestP, odds[best.$1]);
-
-      final score = _score(bestP: bestP, ev: ev, kickoff: it['kickoff']);
-
-      picks.add({
-        ...it,
-        '_pick': best.$1, // '1', 'X', '2'
-        '_p': bestP,
-        '_ev': ev,
-        '_score': score,
-      });
-    }
-
-    // sortare GOD MODE: scor desc (prob + EV + recency)
-    picks.sort((a, b) => (_toDouble(b['_score'])).compareTo(_toDouble(a['_score'])));
-
-    // Top per league (opțional)
-    if (widget.settings.topPerLeague) {
-      final byLeague = <String, List<Map<String, dynamic>>>{};
-      for (final p in picks) {
-        final lid = (p['league_id'] ?? 'unknown').toString();
-        (byLeague[lid] ??= []).add(p);
-      }
-      final out = <Map<String, dynamic>>[];
-      for (final entry in byLeague.entries) {
-        // ia max 3 per league (poți schimba)
-        out.addAll(entry.value.take(3));
-      }
-      out.sort((a, b) => (_toDouble(b['_score'])).compareTo(_toDouble(a['_score'])));
-      return out;
-    }
-
-    return picks;
   }
 
   Future<void> _refresh() async {
-    setState(() => _future = _load());
+    setState(() {
+      // reîncarcă dar tot cu cache; dacă vrei “hard refresh”, fă useCache:false în service.
+      _future = _load();
+    });
     await _future;
-  }
-
-  static double _toDouble(dynamic v) {
-    if (v == null) return 0;
-    if (v is num) return v.toDouble();
-    return double.tryParse(v.toString()) ?? 0;
-  }
-
-  // return (market, prob)
-  (String, double) _bestMarket(double pHome, double pDraw, double pAway) {
-    var market = '1';
-    var p = pHome;
-
-    if (pDraw > p) {
-      market = 'X';
-      p = pDraw;
-    }
-    if (pAway > p) {
-      market = '2';
-      p = pAway;
-    }
-    return (market, p);
-  }
-
-  // odds map: '1'/'X'/'2' -> odd
-  Map<String, double> _extractOdds(Map<String, dynamic> it) {
-    // dacă backend-ul tău returnează alt nume, mapează aici
-    // ex: odds_1 / odds_x / odds_2  sau odd_home/odd_draw/odd_away
-    final o1 = _toDouble(it['odds_1'] ?? it['odd_home'] ?? it['odds_home']);
-    final ox = _toDouble(it['odds_x'] ?? it['odd_draw'] ?? it['odds_draw']);
-    final o2 = _toDouble(it['odds_2'] ?? it['odd_away'] ?? it['odds_away']);
-    return {'1': o1, 'X': ox, '2': o2};
-  }
-
-  // EV = p*odds - 1  (dacă nu avem odds => 0)
-  double _expectedValue(double p, double odd) {
-    if (odd <= 1.01) return 0;
-    return (p * odd) - 1.0;
-  }
-
-  // scor: probabilitate + EV bonus + recency bonus
-  double _score({required double bestP, required double ev, required dynamic kickoff}) {
-    final pScore = bestP * 100.0; // 0.72 -> 72
-    final evBonus = (ev > 0 ? (ev * 80.0) : 0); // EV+ ridică în top
-    final timeBonus = _timeBonus(kickoff);
-    return pScore + evBonus + timeBonus;
-  }
-
-  double _timeBonus(dynamic kickoff) {
-    final s = (kickoff ?? '').toString();
-    final dt = DateTime.tryParse(s);
-    if (dt == null) return 0;
-    final hours = dt.difference(DateTime.now()).inHours;
-    // meciurile apropiate primesc ușor bonus (dar mic)
-    if (hours < 0) return 0;
-    if (hours <= 6) return 6;
-    if (hours <= 24) return 3;
-    return 0;
   }
 
   String _leagueName(String leagueId) {
@@ -193,44 +101,126 @@ class _TopPicksTabState extends State<TopPicksTab> {
     return leagueId;
   }
 
-  String _fmtPct(double p) => '${(p * 100).toStringAsFixed(0)}%';
-
-  String _hotLabel(double score, double ev) {
-    if (ev > 0.10) return 'VALUE+';
-    if (score >= 80) return 'HOT';
-    if (score >= 72) return 'PRO';
-    return 'OK';
+  String _fmtPct(dynamic v) {
+    if (v == null) return '-';
+    final n = v is num ? v.toDouble() : double.tryParse(v.toString());
+    if (n == null) return '-';
+    return '${(n * 100).toStringAsFixed(0)}%';
   }
 
-  Color _badgeColor(String tag, BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    switch (tag) {
-      case 'VALUE+':
-        return cs.tertiary;
-      case 'HOT':
-        return cs.primary;
-      case 'PRO':
-        return cs.secondary;
+  // Odds:
+  // - dacă backend trimite o_home/o_draw/o_away folosim aia.
+  // - altfel, derivăm “odds” simple: 1/p (cu protecție).
+  double _oddForOutcome(Map<String, dynamic> item, String outcome) {
+    String key;
+    String pKey;
+    switch (outcome) {
+      case 'H':
+        key = 'o_home';
+        pKey = 'p_home';
+        break;
+      case 'D':
+        key = 'o_draw';
+        pKey = 'p_draw';
+        break;
+      case 'A':
       default:
-        return cs.outlineVariant;
+        key = 'o_away';
+        pKey = 'p_away';
     }
+
+    final raw = item[key];
+    final o = raw is num ? raw.toDouble() : double.tryParse((raw ?? '').toString());
+    if (o != null && o > 1.0) return o;
+
+    final pRaw = item[pKey];
+    final p = pRaw is num ? pRaw.toDouble() : double.tryParse((pRaw ?? '').toString());
+    if (p == null || p <= 0) return 0.0;
+
+    final derived = 1.0 / p;
+    if (derived.isFinite && derived > 1.0) return derived;
+    return 0.0;
+  }
+
+  // Expected Value (simplu): EV = p * odd - 1
+  double _expectedValue(double p, double odd) {
+    if (p <= 0 || odd <= 1.0) return -999.0;
+    return (p * odd) - 1.0;
+  }
+
+  // pick best outcome din H/D/A
+  ({String outcome, double p, double odd, double ev}) _bestPick(Map<String, dynamic> item) {
+    double pH = _toDouble(item['p_home']);
+    double pD = _toDouble(item['p_draw']);
+    double pA = _toDouble(item['p_away']);
+
+    final oddH = _oddForOutcome(item, 'H');
+    final oddD = _oddForOutcome(item, 'D');
+    final oddA = _oddForOutcome(item, 'A');
+
+    final evH = _expectedValue(pH, oddH);
+    final evD = _expectedValue(pD, oddD);
+    final evA = _expectedValue(pA, oddA);
+
+    // max EV, tie-break: probability
+    var best = ('H', pH, oddH, evH);
+
+    void consider(String o, double p, double odd, double ev) {
+      final cur = best;
+      final curEv = cur.$4;
+      final curP = cur.$2;
+      if (ev > curEv) {
+        best = (o, p, odd, ev);
+      } else if (ev == curEv && p > curP) {
+        best = (o, p, odd, ev);
+      }
+    }
+
+    consider('D', pD, oddD, evD);
+    consider('A', pA, oddA, evA);
+
+    return (outcome: best.$1, p: best.$2, odd: best.$3, ev: best.$4);
+  }
+
+  double _toDouble(dynamic v) {
+    if (v == null) return 0.0;
+    final n = v is num ? v.toDouble() : double.tryParse(v.toString());
+    return n ?? 0.0;
+  }
+
+  String _outcomeLabel(String o) {
+    switch (o) {
+      case 'H':
+        return '1 (Home)';
+      case 'D':
+        return 'X (Draw)';
+      case 'A':
+      default:
+        return '2 (Away)';
+    }
+  }
+
+  bool _statusOk(Map<String, dynamic> item) {
+    final filter = (widget.settings.status ?? 'all').toString();
+    if (filter == 'all') return true;
+
+    final st = (item['status'] ?? '').toString().toLowerCase();
+    return st == filter.toLowerCase();
   }
 
   @override
   Widget build(BuildContext context) {
+    final threshold = widget.settings.threshold; // ex: 0.60
+    final topPerLeague = widget.settings.topPerLeague;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Top Picks PRO'),
+        title: const Text('Top Picks'),
         actions: [
           IconButton(
             tooltip: 'Refresh',
             onPressed: _refresh,
             icon: const Icon(Icons.refresh),
-          ),
-          IconButton(
-            tooltip: _vip ? 'VIP ON' : 'VIP OFF (demo toggle)',
-            onPressed: () => setState(() => _vip = !_vip),
-            icon: Icon(_vip ? Icons.lock_open : Icons.lock_outline),
           ),
         ],
       ),
@@ -241,20 +231,89 @@ class _TopPicksTabState extends State<TopPicksTab> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text('Eroare: ${snap.error}'),
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('Eroare: ${snap.error}'),
+              ),
             );
           }
 
-          final all = snap.data ?? [];
-          if (all.isEmpty) {
-            return const Center(child: Text('Nu am găsit Top Picks pentru perioada aleasă.'));
+          final data = snap.data ?? <Map<String, dynamic>>[];
+          if (data.isEmpty) {
+            return const Center(child: Text('Nu există meciuri în intervalul ales.'));
           }
 
-          // MAX MONEY: free gating
-          final visible = _vip ? all : all.take(_freeLimit).toList();
-          final lockedCount = all.length - visible.length;
+          // build picks
+          final picks = <_Pick>[];
+
+          for (final item in data) {
+            if (!_statusOk(item)) continue;
+
+            final best = _bestPick(item);
+
+            // filtrează după threshold
+            if (best.p < threshold) continue;
+
+            // păstrează doar EV “decent” (opțional)
+            if (!best.ev.isFinite) continue;
+
+            final leagueId = (item['league_id'] ?? 'unknown').toString();
+            final home = (item['home'] ?? '').toString();
+            final away = (item['away'] ?? '').toString();
+            final kickoff = (item['kickoff'] ?? '').toString();
+
+            picks.add(_Pick(
+              leagueId: leagueId,
+              leagueName: _leagueName(leagueId),
+              home: home,
+              away: away,
+              kickoff: kickoff,
+              outcome: best.outcome,
+              p: best.p,
+              odd: best.odd,
+              ev: best.ev,
+              raw: item,
+            ));
+          }
+
+          // grupare per league
+          final byLeague = <String, List<_Pick>>{};
+          for (final p in picks) {
+            byLeague.putIfAbsent(p.leagueId, () => <_Pick>[]).add(p);
+          }
+
+          // sort in fiecare liga: EV desc, p desc
+          for (final k in byLeague.keys) {
+            byLeague[k]!.sort((a, b) {
+              final ev = b.ev.compareTo(a.ev);
+              if (ev != 0) return ev;
+              return b.p.compareTo(a.p);
+            });
+          }
+
+          // “top per league” sau toate
+          final finalList = <_Pick>[];
+          final leagueKeys = byLeague.keys.toList()
+            ..sort((a, b) => _leagueName(a).compareTo(_leagueName(b)));
+
+          for (final leagueId in leagueKeys) {
+            final list = byLeague[leagueId]!;
+            if (topPerLeague) {
+              finalList.add(list.first);
+            } else {
+              finalList.addAll(list);
+            }
+          }
+
+          if (finalList.isEmpty) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('Nu există Top Picks la threshold ${(threshold * 100).toStringAsFixed(0)}%.'),
+              ),
+            );
+          }
 
           return RefreshIndicator(
             onRefresh: _refresh,
@@ -264,36 +323,53 @@ class _TopPicksTabState extends State<TopPicksTab> {
                 _HeaderCard(
                   from: _from,
                   to: _to,
-                  threshold: widget.settings.threshold,
-                  topPerLeague: widget.settings.topPerLeague,
-                  total: all.length,
-                  shown: visible.length,
-                  vip: _vip,
-                  locked: lockedCount > 0 ? lockedCount : 0,
+                  threshold: threshold,
+                  topPerLeague: topPerLeague,
+                  total: finalList.length,
                 ),
-
-                if (!_vip && lockedCount > 0) ...[
-                  const SizedBox(height: 10),
-                  _PaywallCard(
-                    lockedCount: lockedCount,
-                    onUnlock: () => setState(() => _vip = true), // demo unlock
-                  ),
-                ],
-
                 const SizedBox(height: 12),
 
-                // list
-                for (final it in visible) _PickTile(
-                  item: it,
-                  leagueName: _leagueName((it['league_id'] ?? 'unknown').toString()),
-                  pct: _fmtPct(_toDouble(it['_p'])),
-                  pick: (it['_pick'] ?? '').toString(),
-                  ev: _toDouble(it['_ev']),
-                  score: _toDouble(it['_score']),
-                  tag: _hotLabel(_toDouble(it['_score']), _toDouble(it['_ev'])),
-                  badgeColor: _badgeColor(_hotLabel(_toDouble(it['_score']), _toDouble(it['_ev'])), context),
-                ),
-
+                for (final p in finalList) ...[
+                  Card(
+                    child: ListTile(
+                      title: Text('${p.home} vs ${p.away}'),
+                      subtitle: Text('${p.leagueName}\nKickoff: ${p.kickoff}'),
+                      isThreeLine: true,
+                      trailing: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(_outcomeLabel(p.outcome)),
+                          const SizedBox(height: 4),
+                          Text('${(p.p * 100).toStringAsFixed(0)}%'),
+                          Text('EV ${(p.ev * 100).toStringAsFixed(0)}%'),
+                        ],
+                      ),
+                      onTap: () {
+                        // poți deschide prediction sheet dacă vrei.
+                        // momentan doar dialog cu detalii.
+                        showDialog(
+                          context: context,
+                          builder: (_) => AlertDialog(
+                            title: Text('${p.home} vs ${p.away}'),
+                            content: Text(
+                              'League: ${p.leagueName}\n'
+                              'Pick: ${_outcomeLabel(p.outcome)}\n'
+                              'Prob: ${_fmtPct(p.p)}\n'
+                              'Odd: ${p.odd.toStringAsFixed(2)}\n'
+                              'EV: ${(p.ev * 100).toStringAsFixed(1)}%\n',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text('OK'),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 24),
               ],
             ),
@@ -304,15 +380,40 @@ class _TopPicksTabState extends State<TopPicksTab> {
   }
 }
 
+class _Pick {
+  final String leagueId;
+  final String leagueName;
+  final String home;
+  final String away;
+  final String kickoff;
+
+  final String outcome; // H/D/A
+  final double p;
+  final double odd;
+  final double ev;
+
+  final Map<String, dynamic> raw;
+
+  _Pick({
+    required this.leagueId,
+    required this.leagueName,
+    required this.home,
+    required this.away,
+    required this.kickoff,
+    required this.outcome,
+    required this.p,
+    required this.odd,
+    required this.ev,
+    required this.raw,
+  });
+}
+
 class _HeaderCard extends StatelessWidget {
   final String from;
   final String to;
   final double threshold;
   final bool topPerLeague;
   final int total;
-  final int shown;
-  final bool vip;
-  final int locked;
 
   const _HeaderCard({
     required this.from,
@@ -320,127 +421,22 @@ class _HeaderCard extends StatelessWidget {
     required this.threshold,
     required this.topPerLeague,
     required this.total,
-    required this.shown,
-    required this.vip,
-    required this.locked,
   });
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('PRO Engine', style: Theme.of(context).textTheme.titleMedium),
+            Text('Interval: $from → $to', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 6),
-            Text('Interval: $from → $to'),
             Text('Threshold: ${(threshold * 100).toStringAsFixed(0)}%'),
-            Text('Mode: ${topPerLeague ? "Top per league" : "Global top"}'),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 10,
-              runSpacing: 8,
-              children: [
-                Chip(label: Text('Total: $total')),
-                Chip(label: Text('Afișate: $shown')),
-                Chip(
-                  label: Text(vip ? 'VIP ON' : 'FREE'),
-                  backgroundColor: vip ? cs.primaryContainer : cs.surfaceContainerHighest,
-                ),
-                if (!vip && locked > 0) Chip(label: Text('Locked: $locked')),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PaywallCard extends StatelessWidget {
-  final int lockedCount;
-  final VoidCallback onUnlock;
-
-  const _PaywallCard({required this.lockedCount, required this.onUnlock});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            Icon(Icons.lock, color: cs.primary),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'Ai încă $lockedCount picks blocate.\nActivează VIP ca să vezi tot (demo unlock).',
-              ),
-            ),
-            const SizedBox(width: 10),
-            FilledButton(
-              onPressed: onUnlock,
-              child: const Text('Unlock'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PickTile extends StatelessWidget {
-  final Map<String, dynamic> item;
-  final String leagueName;
-  final String pick;
-  final String pct;
-  final double ev;
-  final double score;
-  final String tag;
-  final Color badgeColor;
-
-  const _PickTile({
-    required this.item,
-    required this.leagueName,
-    required this.pick,
-    required this.pct,
-    required this.ev,
-    required this.score,
-    required this.tag,
-    required this.badgeColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final home = (item['home'] ?? '').toString();
-    final away = (item['away'] ?? '').toString();
-    final kickoff = (item['kickoff'] ?? '').toString();
-    final status = (item['status'] ?? '').toString();
-
-    final evTxt = ev > 0 ? 'EV+: ${(ev * 100).toStringAsFixed(1)}%' : 'EV: n/a';
-    final sub = 'Liga: $leagueName\nStatus: $status\nKickoff: $kickoff\n$evTxt';
-
-    return Card(
-      child: ListTile(
-        title: Text('$home vs $away'),
-        subtitle: Text(sub),
-        trailing: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: badgeColor,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text('$tag  $pick', style: const TextStyle(fontWeight: FontWeight.w700)),
-            ),
+            Text('Mode: ${topPerLeague ? "Top 1 per league" : "All picks"}'),
             const SizedBox(height: 6),
-            Text('$pct • ${score.toStringAsFixed(1)}'),
+            Text('Total picks: $total'),
           ],
         ),
       ),

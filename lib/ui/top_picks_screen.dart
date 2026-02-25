@@ -44,7 +44,6 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
   final ScrollController _scroll = ScrollController();
 
   Timer? _timer;
-
   CacheInfo? _cacheInfo;
 
   @override
@@ -418,9 +417,35 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     return info.isFresh ? cs.onPrimaryContainer : cs.onSurfaceVariant;
   }
 
-  // ✅ MONEY: interstitial la prediction (la fiecare 3 deschideri, în AdService)
+  // VIP exact score (heuristic, “beta”)
+  String _vipExactScoreSuggestion({
+    required double pHome,
+    required double pDraw,
+    required double pAway,
+    required double pOver,
+    required double pUnder,
+  }) {
+    final winner = (pHome >= pDraw && pHome >= pAway)
+        ? 'H'
+        : (pAway >= pHome && pAway >= pDraw)
+            ? 'A'
+            : 'D';
+
+    final goalsHigh = pOver >= pUnder;
+
+    if (winner == 'D') {
+      return goalsHigh ? '2-2' : '1-1';
+    }
+    if (winner == 'H') {
+      return goalsHigh ? '2-1' : '1-0';
+    }
+    return goalsHigh ? '1-2' : '0-1';
+  }
+
+  // ✅ MONEY: interstitial + bottom sheet + rewarded unlock
   void _openPrediction(BuildContext context, Map<String, dynamic> item) {
-    AdService.instance.maybeShowPredictionAd(); // 💰
+    // Interstitial (la fiecare 3)
+    AdService.instance.maybeShowPredictionAd();
 
     final providerId = (item['provider_fixture_id'] ?? '').toString();
     if (providerId.isEmpty) return;
@@ -429,74 +454,156 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: FutureBuilder<Map<String, dynamic>>(
-            future: widget.service.getPrediction(providerFixtureId: providerId),
-            builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return const SizedBox(height: 220, child: Center(child: CircularProgressIndicator()));
-              }
-              if (snap.hasError) {
-                return SizedBox(height: 220, child: Center(child: Text('Eroare: ${snap.error}')));
-              }
+      builder: (_) {
+        bool vipUnlocked = false;
 
-              final pred = snap.data ?? <String, dynamic>{};
+        return StatefulBuilder(
+          builder: (context, setSheet) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: FutureBuilder<Map<String, dynamic>>(
+                  future: widget.service.getPrediction(providerFixtureId: providerId),
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const SizedBox(height: 240, child: Center(child: CircularProgressIndicator()));
+                    }
+                    if (snap.hasError) {
+                      return SizedBox(height: 240, child: Center(child: Text('Eroare: ${snap.error}')));
+                    }
 
-              String fmt(dynamic v) {
-                final n = v is num ? v.toDouble() : double.tryParse(v.toString());
-                if (n == null) return '-';
-                return '${(n * 100).toStringAsFixed(0)}%';
-              }
+                    final pred = snap.data ?? <String, dynamic>{};
 
-              final pHome = pred['p_home'] ?? item['p_home'];
-              final pDraw = pred['p_draw'] ?? item['p_draw'];
-              final pAway = pred['p_away'] ?? item['p_away'];
-              final pOver = pred['p_over25'] ?? item['p_over25'];
-              final pUnder = pred['p_under25'] ?? item['p_under25'];
+                    String fmt(dynamic v) {
+                      final n = v is num ? v.toDouble() : double.tryParse(v.toString());
+                      if (n == null) return '-';
+                      return '${(n * 100).toStringAsFixed(0)}%';
+                    }
 
-              final home = (item['home'] ?? '').toString();
-              final away = (item['away'] ?? '').toString();
+                    final pHome = _num(pred['p_home'] ?? item['p_home']);
+                    final pDraw = _num(pred['p_draw'] ?? item['p_draw']);
+                    final pAway = _num(pred['p_away'] ?? item['p_away']);
+                    final pOver = _num(pred['p_over25'] ?? item['p_over25']);
+                    final pUnder = _num(pred['p_under25'] ?? item['p_under25']);
 
-              final bestLabel = (item['_best_label'] ?? '').toString();
-              final bestP = (item['_best_p'] is double) ? (item['_best_p'] as double) : _num(item['_best_p']);
+                    final home = (item['home'] ?? '').toString();
+                    final away = (item['away'] ?? '').toString();
 
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('$home vs $away', style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 10),
-                  if (bestLabel.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: _confidenceBg(context, bestP),
-                        borderRadius: BorderRadius.circular(999),
+                    final bestLabel = (item['_best_label'] ?? '').toString();
+                    final bestP = (item['_best_p'] is double) ? (item['_best_p'] as double) : _num(item['_best_p']);
+
+                    final vipScore = _vipExactScoreSuggestion(
+                      pHome: pHome,
+                      pDraw: pDraw,
+                      pAway: pAway,
+                      pOver: pOver,
+                      pUnder: pUnder,
+                    );
+
+                    return SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('$home vs $away', style: Theme.of(context).textTheme.titleLarge),
+                          const SizedBox(height: 10),
+
+                          if (bestLabel.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: _confidenceBg(context, bestP),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                'BEST $bestLabel ${_fmtPct(bestP)}',
+                                style: TextStyle(
+                                  color: _confidenceFg(context, bestP),
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+
+                          const SizedBox(height: 14),
+
+                          _PredRow(label: '1 (Home)', value: fmt(pHome)),
+                          _PredRow(label: 'X (Draw)', value: fmt(pDraw)),
+                          _PredRow(label: '2 (Away)', value: fmt(pAway)),
+                          const Divider(height: 24),
+                          _PredRow(label: 'Over 2.5', value: fmt(pOver)),
+                          _PredRow(label: 'Under 2.5', value: fmt(pUnder)),
+
+                          const SizedBox(height: 16),
+
+                          // 🔒 VIP lock / unlock
+                          if (!vipUnlocked)
+                            FilledButton.icon(
+                              onPressed: () async {
+                                final ok = await AdService.instance.showRewarded();
+                                if (!context.mounted) return;
+
+                                if (ok) {
+                                  setSheet(() => vipUnlocked = true);
+                                }
+
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(ok ? 'VIP unlocked!' : 'Ad not ready. Try again.'),
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.lock_open),
+                              label: const Text('Unlock VIP (Rewarded Ad)'),
+                            )
+                          else
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(16),
+                                color: Theme.of(context).colorScheme.tertiaryContainer,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'VIP • Exact Score (beta)',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      color: Theme.of(context).colorScheme.onTertiaryContainer,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    vipScore,
+                                    style: TextStyle(
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.w900,
+                                      color: Theme.of(context).colorScheme.onTertiaryContainer,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'VIP Tip: folosește acest score ca “lean”, nu ca garanție.',
+                                    style: TextStyle(
+                                      color: Theme.of(context).colorScheme.onTertiaryContainer,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                          const SizedBox(height: 10),
+                        ],
                       ),
-                      child: Text(
-                        'BEST $bestLabel ${_fmtPct(bestP)}',
-                        style: TextStyle(
-                          color: _confidenceFg(context, bestP),
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 14),
-                  _PredRow(label: '1 (Home)', value: fmt(pHome)),
-                  _PredRow(label: 'X (Draw)', value: fmt(pDraw)),
-                  _PredRow(label: '2 (Away)', value: fmt(pAway)),
-                  const Divider(height: 24),
-                  _PredRow(label: 'Over 2.5', value: fmt(pOver)),
-                  _PredRow(label: 'Under 2.5', value: fmt(pUnder)),
-                  const SizedBox(height: 10),
-                ],
-              );
-            },
-          ),
-        ),
-      ),
+                    );
+                  },
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -563,9 +670,9 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                       ButtonSegment(value: 1, label: Text('Tomorrow')),
                     ],
                     selected: {_dayIndex},
-                    onSelectionChanged: (s) {
+                    onSelectionChanged: (s) async {
                       setState(() => _dayIndex = s.first);
-                      _loadInitial();
+                      await _loadInitial();
                     },
                   ),
 

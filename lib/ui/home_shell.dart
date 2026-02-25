@@ -2,102 +2,98 @@ import 'package:flutter/material.dart';
 
 import '../services/sure_predict_service.dart';
 import '../state/leagues_store.dart';
-import '../state/favorites_store.dart';
-
-import 'fixtures_tab.dart';
-import 'favorites_screen.dart';
-import 'settings_screen.dart';
-import 'top_picks_tab.dart';
-
 import '../state/settings_store.dart';
-import '../state/vip_store.dart';
 
-class HomeShell extends StatefulWidget {
+class TopPicksTab extends StatefulWidget {
   final SurePredictService service;
   final LeaguesStore leaguesStore;
-  final FavoritesStore favoritesStore;
+  final SettingsStore settings;
 
-  const HomeShell({
+  const TopPicksTab({
     super.key,
     required this.service,
     required this.leaguesStore,
-    required this.favoritesStore,
+    required this.settings,
   });
 
   @override
-  State<HomeShell> createState() => _HomeShellState();
+  State<TopPicksTab> createState() => _TopPicksTabState();
 }
 
-class _HomeShellState extends State<HomeShell> {
-  int _index = 0;
+class _TopPicksTabState extends State<TopPicksTab> {
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _items = [];
 
-  late final SettingsStore _settingsStore;
-  late final VipStore _vipStore;
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
 
-   @override
-void initState() {
-  super.initState();
-  _settingsStore = SettingsStore();
-  _vipStore = VipStore();
+  Future<void> _load({bool force = false}) async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
 
-  // 🔥 IMPORTANT: încarcă setările salvate
-  _settingsStore.load();
-}
+    try {
+      final leagues = widget.leaguesStore.selectedIds;
+
+      final data = await widget.service.getTopPicks(
+        leagueIds: leagues,
+        threshold: widget.settings.threshold,
+        force: force,
+      );
+
+      _items = List<Map<String, dynamic>>.from(data);
+    } catch (e) {
+      _error = e.toString();
+    }
+
+    if (mounted) {
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _refresh() => _load(force: true);
 
   @override
   Widget build(BuildContext context) {
-    final pages = <Widget>[
-      // 0️⃣ Fixtures
-      FixturesTab(
-        service: widget.service,
-        leaguesStore: widget.leaguesStore,
-        favoritesStore: widget.favoritesStore,
-      ),
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-      // 1️⃣ ⭐ Top Picks PRO (NOU)
-      TopPicksTab(
-        service: widget.service,
-        leaguesStore: widget.leaguesStore,
-        favoritesStore: widget.favoritesStore,
-        settings: _settingsStore,
-      ),
+    if (_error != null) {
+      return Center(child: Text('Eroare: $_error'));
+    }
 
-      // 2️⃣ Favorites
-      FavoritesScreen(
-        service: widget.service,
-        favoritesStore: widget.favoritesStore,
-      ),
+    if (_items.isEmpty) {
+      return const Center(child: Text('No top picks'));
+    }
 
-      // 3️⃣ Settings
-      SettingsScreen(
-        settings: _settingsStore,
-        vipStore: _vipStore,
-      ),
-    ];
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: ListView.separated(
+        padding: const EdgeInsets.all(12),
+        itemCount: _items.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (context, i) {
+          final m = _items[i];
 
-    return Scaffold(
-      body: SafeArea(child: pages[_index]),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.sports_soccer),
-            label: 'Fixtures',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.trending_up),
-            label: 'Top Picks',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.star_outline),
-            label: 'Favorites',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            label: 'Settings',
-          ),
-        ],
+          final home = m['home'] ?? '?';
+          final away = m['away'] ?? '?';
+          final prob = (m['confidence'] ?? 0).toDouble();
+
+          return Card(
+            child: ListTile(
+              title: Text('$home vs $away'),
+              subtitle:
+                  Text('Confidence: ${(prob * 100).toStringAsFixed(0)}%'),
+              trailing: const Icon(Icons.star, color: Colors.amber),
+            ),
+          );
+        },
       ),
     );
   }

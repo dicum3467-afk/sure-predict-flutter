@@ -7,27 +7,25 @@ import 'services/sure_predict_service.dart';
 import 'state/leagues_store.dart';
 import 'state/favorites_store.dart';
 import 'state/settings_store.dart';
+import 'state/vip_store.dart';
 
 import 'ui/home_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ✅ init ads
   await AdService.instance.init();
 
-  // 🔌 API client
   final apiClient = ApiClient(
     baseUrl: 'https://sure-predict-backend.onrender.com',
   );
 
-  // 🧠 service
   final service = SurePredictService(apiClient);
 
-  // 🗂 stores
   final leaguesStore = LeaguesStore(service);
   final favoritesStore = FavoritesStore();
   final settingsStore = SettingsStore();
+  final vipStore = VipStore();
 
   runApp(
     SurePredictApp(
@@ -35,6 +33,7 @@ Future<void> main() async {
       leaguesStore: leaguesStore,
       favoritesStore: favoritesStore,
       settingsStore: settingsStore,
+      vipStore: vipStore,
     ),
   );
 }
@@ -44,6 +43,7 @@ class SurePredictApp extends StatelessWidget {
   final LeaguesStore leaguesStore;
   final FavoritesStore favoritesStore;
   final SettingsStore settingsStore;
+  final VipStore vipStore;
 
   const SurePredictApp({
     super.key,
@@ -51,6 +51,7 @@ class SurePredictApp extends StatelessWidget {
     required this.leaguesStore,
     required this.favoritesStore,
     required this.settingsStore,
+    required this.vipStore,
   });
 
   @override
@@ -67,6 +68,7 @@ class SurePredictApp extends StatelessWidget {
         leaguesStore: leaguesStore,
         favoritesStore: favoritesStore,
         settingsStore: settingsStore,
+        vipStore: vipStore,
       ),
     );
   }

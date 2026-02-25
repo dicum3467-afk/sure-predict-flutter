@@ -8,9 +8,10 @@ import 'state/favorites_store.dart';
 
 import 'ui/home_shell.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Base URL backend (Render)
   const baseUrl = 'https://sure-predict-backend.onrender.com';
 
   final api = ApiClient(baseUrl: baseUrl);
@@ -19,11 +20,13 @@ void main() async {
   final leaguesStore = LeaguesStore(service);
   final favoritesStore = FavoritesStore();
 
-  runApp(SurePredictApp(
-    service: service,
-    leaguesStore: leaguesStore,
-    favoritesStore: favoritesStore,
-  ));
+  runApp(
+    SurePredictApp(
+      service: service,
+      leaguesStore: leaguesStore,
+      favoritesStore: favoritesStore,
+    ),
+  );
 }
 
 class SurePredictApp extends StatelessWidget {
@@ -43,7 +46,10 @@ class SurePredictApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Sure Predict',
-      theme: ThemeData(useMaterial3: true),
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: Colors.blue,
+      ),
       home: HomeShell(
         service: service,
         leaguesStore: leaguesStore,

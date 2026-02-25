@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 
+import '../core/ads/ad_service.dart';
 import '../services/sure_predict_service.dart';
 import '../state/leagues_store.dart';
 import '../state/favorites_store.dart';
@@ -32,6 +34,8 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
 
+  BannerAd? _banner;
+
   String get _title {
     switch (_index) {
       case 0:
@@ -56,10 +60,18 @@ class _HomeShellState extends State<HomeShell> {
     widget.favoritesStore.load();
     widget.settingsStore.load();
 
-    if (widget.leaguesStore.items.isEmpty &&
-        !widget.leaguesStore.isLoading) {
+    if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
       widget.leaguesStore.load();
     }
+
+    // ✅ Banner Ad
+    _banner = AdService.instance.createBanner()..load();
+  }
+
+  @override
+  void dispose() {
+    _banner?.dispose();
+    super.dispose();
   }
 
   @override
@@ -101,33 +113,27 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _index,
-        children: pages,
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.trending_up),
-            label: 'Top',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.sports_soccer),
-            label: 'Fixtures',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.public),
-            label: 'Leagues',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.star),
-            label: 'Favorites',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings),
-            label: 'Settings',
+      body: IndexedStack(index: _index, children: pages),
+
+      // ✅ Banner + NavigationBar
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_banner != null)
+            SizedBox(
+              height: 50,
+              child: AdWidget(ad: _banner!),
+            ),
+          NavigationBar(
+            selectedIndex: _index,
+            onDestinationSelected: (i) => setState(() => _index = i),
+            destinations: const [
+              NavigationDestination(icon: Icon(Icons.trending_up), label: 'Top'),
+              NavigationDestination(icon: Icon(Icons.sports_soccer), label: 'Fixtures'),
+              NavigationDestination(icon: Icon(Icons.public), label: 'Leagues'),
+              NavigationDestination(icon: Icon(Icons.star), label: 'Favorites'),
+              NavigationDestination(icon: Icon(Icons.settings), label: 'Settings'),
+            ],
           ),
         ],
       ),

@@ -6,6 +6,7 @@ import '../services/sure_predict_service.dart';
 import '../state/leagues_store.dart';
 import '../state/favorites_store.dart';
 import '../state/settings_store.dart';
+import '../state/vip_store.dart';
 
 import 'top_picks_screen.dart';
 import 'fixtures_tab.dart';
@@ -18,6 +19,7 @@ class HomeShell extends StatefulWidget {
   final LeaguesStore leaguesStore;
   final FavoritesStore favoritesStore;
   final SettingsStore settingsStore;
+  final VipStore vipStore;
 
   const HomeShell({
     super.key,
@@ -25,6 +27,7 @@ class HomeShell extends StatefulWidget {
     required this.leaguesStore,
     required this.favoritesStore,
     required this.settingsStore,
+    required this.vipStore,
   });
 
   @override
@@ -59,12 +62,12 @@ class _HomeShellState extends State<HomeShell> {
 
     widget.favoritesStore.load();
     widget.settingsStore.load();
+    widget.vipStore.load();
 
     if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
       widget.leaguesStore.load();
     }
 
-    // ✅ Banner Ad
     _banner = AdService.instance.createBanner()..load();
   }
 
@@ -81,6 +84,7 @@ class _HomeShellState extends State<HomeShell> {
         service: widget.service,
         favoritesStore: widget.favoritesStore,
         settingsStore: widget.settingsStore,
+        vipStore: widget.vipStore,
       ),
       FixturesTab(
         service: widget.service,
@@ -97,6 +101,7 @@ class _HomeShellState extends State<HomeShell> {
       ),
       SettingsScreen(
         settings: widget.settingsStore,
+        vipStore: widget.vipStore,
       ),
     ];
 
@@ -114,8 +119,6 @@ class _HomeShellState extends State<HomeShell> {
         ],
       ),
       body: IndexedStack(index: _index, children: pages),
-
-      // ✅ Banner + NavigationBar
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

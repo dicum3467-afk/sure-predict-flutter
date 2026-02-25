@@ -34,12 +34,15 @@ class _HomeShellState extends State<HomeShell> {
   late final SettingsStore _settingsStore;
   late final VipStore _vipStore;
 
-  @override
-  void initState() {
-    super.initState();
-    _settingsStore = SettingsStore();
-    _vipStore = VipStore();
-  }
+   @override
+void initState() {
+  super.initState();
+  _settingsStore = SettingsStore();
+  _vipStore = VipStore();
+
+  // 🔥 IMPORTANT: încarcă setările salvate
+  _settingsStore.load();
+}
 
   @override
   Widget build(BuildContext context) {

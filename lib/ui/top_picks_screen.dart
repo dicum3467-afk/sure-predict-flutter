@@ -5,17 +5,20 @@ import '../core/ads/ad_service.dart';
 import '../services/sure_predict_service.dart';
 import '../state/favorites_store.dart';
 import '../state/settings_store.dart';
+import '../state/vip_store.dart';
 
 class TopPicksScreen extends StatefulWidget {
   final SurePredictService service;
   final FavoritesStore favoritesStore;
   final SettingsStore settingsStore;
+  final VipStore vipStore;
 
   const TopPicksScreen({
     super.key,
     required this.service,
     required this.favoritesStore,
     required this.settingsStore,
+    required this.vipStore,
   });
 
   @override
@@ -51,6 +54,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     super.initState();
 
     widget.favoritesStore.load();
+    widget.vipStore.load();
 
     _threshold = widget.settingsStore.threshold;
     _status = widget.settingsStore.status;
@@ -417,7 +421,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     return info.isFresh ? cs.onPrimaryContainer : cs.onSurfaceVariant;
   }
 
-  // VIP exact score (heuristic, “beta”)
+  // VIP exact score (heuristic “beta”)
   String _vipExactScoreSuggestion({
     required double pHome,
     required double pDraw,
@@ -433,18 +437,40 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
     final goalsHigh = pOver >= pUnder;
 
-    if (winner == 'D') {
-      return goalsHigh ? '2-2' : '1-1';
-    }
-    if (winner == 'H') {
-      return goalsHigh ? '2-1' : '1-0';
-    }
+    if (winner == 'D') return goalsHigh ? '2-2' : '1-1';
+    if (winner == 'H') return goalsHigh ? '2-1' : '1-0';
     return goalsHigh ? '1-2' : '0-1';
   }
 
-  // ✅ MONEY: interstitial + bottom sheet + rewarded unlock
+  Widget _vipChip(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: cs.tertiaryContainer,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        'VIP 👑',
+        style: TextStyle(
+          color: cs.onTertiaryContainer,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+
+  String _vipRemainingText() {
+    final d = widget.vipStore.remaining;
+    if (d == Duration.zero) return 'VIP inactive';
+    final m = d.inMinutes;
+    final s = d.inSeconds % 60;
+    if (m <= 0) return 'VIP ${s}s left';
+    return 'VIP ${m}m ${s}s left';
+  }
+
   void _openPrediction(BuildContext context, Map<String, dynamic> item) {
-    // Interstitial (la fiecare 3)
+    // Interstitial (la fiecare 3 deschideri)
     AdService.instance.maybeShowPredictionAd();
 
     final providerId = (item['provider_fixture_id'] ?? '').toString();
@@ -455,10 +481,11 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
       showDragHandle: true,
       isScrollControlled: true,
       builder: (_) {
-        bool vipUnlocked = false;
+        return AnimatedBuilder(
+          animation: widget.vipStore,
+          builder: (context, __) {
+            final vip = widget.vipStore.isVip;
 
-        return StatefulBuilder(
-          builder: (context, setSheet) {
             return SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -502,10 +529,18 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
                     return SingleChildScrollView(
                       child: Column(
-                        mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('$home vs $away', style: Theme.of(context).textTheme.titleLarge),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text('$home vs $away', style: Theme.of(context).textTheme.titleLarge),
+                              ),
+                              if (vip) _vipChip(context),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(_vipRemainingText(), style: Theme.of(context).textTheme.bodySmall),
                           const SizedBox(height: 10),
 
                           if (bestLabel.isNotEmpty)
@@ -525,7 +560,6 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                             ),
 
                           const SizedBox(height: 14),
-
                           _PredRow(label: '1 (Home)', value: fmt(pHome)),
                           _PredRow(label: 'X (Draw)', value: fmt(pDraw)),
                           _PredRow(label: '2 (Away)', value: fmt(pAway)),
@@ -535,22 +569,22 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
 
                           const SizedBox(height: 16),
 
-                          // 🔒 VIP lock / unlock
-                          if (!vipUnlocked)
+                          if (!vip)
                             FilledButton.icon(
                               onPressed: () async {
                                 final ok = await AdService.instance.showRewarded();
                                 if (!context.mounted) return;
 
                                 if (ok) {
-                                  setSheet(() => vipUnlocked = true);
+                                  await widget.vipStore.grant(const Duration(minutes: 30));
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('VIP unlocked for 30 minutes!')),
+                                  );
+                                } else {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Ad not ready. Try again.')),
+                                  );
                                 }
-
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(ok ? 'VIP unlocked!' : 'Ad not ready. Try again.'),
-                                  ),
-                                );
                               },
                               icon: const Icon(Icons.lock_open),
                               label: const Text('Unlock VIP (Rewarded Ad)'),
@@ -615,7 +649,7 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _startOrStopTimer(top));
 
     return AnimatedBuilder(
-      animation: Listenable.merge([widget.favoritesStore, widget.settingsStore]),
+      animation: Listenable.merge([widget.favoritesStore, widget.settingsStore, widget.vipStore]),
       builder: (context, _) {
         if (_loading) return const Center(child: CircularProgressIndicator());
 
@@ -635,6 +669,8 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
           );
         }
 
+        final vip = widget.vipStore.isVip;
+
         return Column(
           children: [
             Padding(
@@ -647,6 +683,10 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                       Expanded(
                         child: Text('Top Picks • ${r.label}', style: Theme.of(context).textTheme.titleLarge),
                       ),
+                      if (vip) ...[
+                        _vipChip(context),
+                        const SizedBox(width: 8),
+                      ],
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
@@ -804,7 +844,12 @@ class _TopPicksScreenState extends State<TopPicksScreen> {
                             color: fav ? Colors.amber : null,
                             onPressed: () => widget.favoritesStore.toggle(it),
                           ),
-                          title: Text('$home vs $away'),
+                          title: Row(
+                            children: [
+                              Expanded(child: Text('$home vs $away')),
+                              if (vip) _vipChip(context),
+                            ],
+                          ),
                           subtitle: Text('League: $leagueId\nStatus: $status • Kickoff: $kickoff'),
                           isThreeLine: true,
                           trailing: Container(

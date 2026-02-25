@@ -4,12 +4,10 @@ import '../services/sure_predict_service.dart';
 import '../state/leagues_store.dart';
 import '../state/favorites_store.dart';
 
-// screens/tabs existente la tine
 import 'fixtures_tab.dart';
 import 'favorites_screen.dart';
 import 'settings_screen.dart';
 
-// stores folosite de SettingsScreen (din screenshot-ul tău)
 import '../state/settings_store.dart';
 import '../state/vip_store.dart';
 
@@ -48,10 +46,11 @@ class _HomeShellState extends State<HomeShell> {
       FixturesTab(
         service: widget.service,
         leaguesStore: widget.leaguesStore,
+        favoritesStore: widget.favoritesStore,
       ),
       FavoritesScreen(
-        favoritesStore: widget.favoritesStore,
         service: widget.service,
+        favoritesStore: widget.favoritesStore,
       ),
       SettingsScreen(
         settings: _settingsStore,

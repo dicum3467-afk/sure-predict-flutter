@@ -6,46 +6,59 @@ class AdService {
   static final AdService instance = AdService._();
 
   InterstitialAd? _interstitial;
-  bool _isLoadingInterstitial = false;
+  RewardedAd? _rewarded;
+
+  bool _loadingInterstitial = false;
+  bool _loadingRewarded = false;
+
   int _predictionOpens = 0;
 
-  // =========================
-  // ✅ IDs REALE (ale tale)
-  // =========================
-  static const String _realBannerId = 'ca-app-pub-2800443504046517/6111381965';
+  // ================= REAL IDs =================
 
-  // ❗ Pune aici interstitial-ul REAL când îl creezi în AdMob.
-  // Dacă nu ai încă, lasă gol și va folosi TEST chiar și în release.
+  static const String _realBannerId =
+      'ca-app-pub-2800443504046517/6111381965';
+
   static const String _realInterstitialId = '';
 
-  // =========================
-  // ✅ IDs TEST (Google)
-  // =========================
-  // Banner test
-  static const String _testBannerId = 'ca-app-pub-3940256099942544/6300978111';
-  // Interstitial test
-  static const String _testInterstitialId = 'ca-app-pub-3940256099942544/1033173712';
+  static const String _realRewardedId = '';
+
+  // ================= TEST IDs =================
+
+  static const String _testBannerId =
+      'ca-app-pub-3940256099942544/6300978111';
+
+  static const String _testInterstitialId =
+      'ca-app-pub-3940256099942544/1033173712';
+
+  static const String _testRewardedId =
+      'ca-app-pub-3940256099942544/5224354917';
 
   String get bannerId => kReleaseMode ? _realBannerId : _testBannerId;
 
   String get interstitialId {
     if (!kReleaseMode) return _testInterstitialId;
-    // în release: dacă nu ai setat încă interstitial real, rămâne test
     if (_realInterstitialId.trim().isEmpty) return _testInterstitialId;
     return _realInterstitialId;
+  }
+
+  String get rewardedId {
+    if (!kReleaseMode) return _testRewardedId;
+    if (_realRewardedId.trim().isEmpty) return _testRewardedId;
+    return _realRewardedId;
   }
 
   Future<void> init() async {
     await MobileAds.instance.initialize();
     _loadInterstitial();
+    _loadRewarded();
   }
 
-  // ---------------- INTERSTITIAL ----------------
+  // ================= INTERSTITIAL =================
 
   void _loadInterstitial() {
-    if (_isLoadingInterstitial) return;
+    if (_loadingInterstitial) return;
 
-    _isLoadingInterstitial = true;
+    _loadingInterstitial = true;
 
     InterstitialAd.load(
       adUnitId: interstitialId,
@@ -53,21 +66,19 @@ class AdService {
       adLoadCallback: InterstitialAdLoadCallback(
         onAdLoaded: (ad) {
           _interstitial = ad;
-          _isLoadingInterstitial = false;
+          _loadingInterstitial = false;
         },
         onAdFailedToLoad: (_) {
           _interstitial = null;
-          _isLoadingInterstitial = false;
+          _loadingInterstitial = false;
         },
       ),
     );
   }
 
-  /// ⭐ Arată interstitial la fiecare 3 deschideri Prediction
   void maybeShowPredictionAd() {
     _predictionOpens++;
 
-    // comercial: o dată la 3
     if (_predictionOpens % 3 != 0) return;
 
     if (_interstitial == null) {
@@ -75,7 +86,8 @@ class AdService {
       return;
     }
 
-    _interstitial!.fullScreenContentCallback = FullScreenContentCallback(
+    _interstitial!.fullScreenContentCallback =
+        FullScreenContentCallback(
       onAdDismissedFullScreenContent: (ad) {
         ad.dispose();
         _interstitial = null;
@@ -92,7 +104,51 @@ class AdService {
     _interstitial = null;
   }
 
-  // ---------------- BANNER ----------------
+  // ================= REWARDED =================
+
+  void _loadRewarded() {
+    if (_loadingRewarded) return;
+
+    _loadingRewarded = true;
+
+    RewardedAd.load(
+      adUnitId: rewardedId,
+      request: const AdRequest(),
+      rewardedAdLoadCallback: RewardedAdLoadCallback(
+        onAdLoaded: (ad) {
+          _rewarded = ad;
+          _loadingRewarded = false;
+        },
+        onAdFailedToLoad: (_) {
+          _rewarded = null;
+          _loadingRewarded = false;
+        },
+      ),
+    );
+  }
+
+  Future<bool> showRewarded() async {
+    if (_rewarded == null) {
+      _loadRewarded();
+      return false;
+    }
+
+    bool earned = false;
+
+    await _rewarded!.show(
+      onUserEarnedReward: (_, __) {
+        earned = true;
+      },
+    );
+
+    _rewarded?.dispose();
+    _rewarded = null;
+    _loadRewarded();
+
+    return earned;
+  }
+
+  // ================= BANNER =================
 
   BannerAd createBanner() {
     return BannerAd(

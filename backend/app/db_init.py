@@ -1,22 +1,8 @@
-from app.db import get_conn
+from app.db import Base, engine
+
+# importă modelele ca să fie înregistrate în Base.metadata
+from app.models import Fixture  # noqa: F401
 
 
-def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS fixtures (
-        id BIGINT PRIMARY KEY,
-        league_id INT,
-        season INT,
-        home_team TEXT,
-        away_team TEXT,
-        match_date TIMESTAMP,
-        status TEXT
-    );
-    """)
-
-    conn.commit()
-    cur.close()
-    conn.close()
+def init_db() -> None:
+    Base.metadata.create_all(bind=engine)

@@ -40,7 +40,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
   List<Map<String, dynamic>> _filterBySelectedLeagues(List<Map<String, dynamic>> list) {
     final selected = widget.leagueIds.map((e) => e.toString()).toSet();
-    if (selected.isEmpty) return list;
+    if (selected.isEmpty) return list; // IMPORTANT: dacă nu ai ligi, arată TOT
     return list.where((it) {
       final lid = (it['league_id'] ?? it['leagueId'] ?? '').toString();
       return selected.contains(lid);
@@ -57,7 +57,6 @@ class _FixturesScreenState extends State<FixturesScreen> {
     });
 
     try {
-      // FIX: fără date_from/date_to (exact ca Swagger-ul tău)
       final data = await widget.service.getFixtures(
         limit: _limit,
         offset: _offset,
@@ -71,7 +70,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
       setState(() {
         _items.addAll(page);
-        _offset += pageRaw.length;
+        _offset += pageRaw.length; // offset pe ce primești din backend
         _hasMore = pageRaw.length == _limit;
         _loading = false;
       });

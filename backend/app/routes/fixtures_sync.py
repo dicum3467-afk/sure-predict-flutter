@@ -1,9 +1,8 @@
 import os
 import json
 from typing import Optional
-from fastapi import APIRouter, Header, HTTPException, Query
 
-from psycopg2.extras import Json
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.db import get_conn
 from app.services.api_football import fetch_fixtures
@@ -21,7 +20,7 @@ def _check_token(x_sync_token: Optional[str]) -> None:
 
 def _upsert_league(cur, api_league_id: int, league_obj: dict) -> str:
     """
-    Creează/actualizează league și returnează league_id (UUID).
+    Creează/actualizează league și returnează league_id (UUID/texte).
     """
     name = None
     country = None
@@ -39,14 +38,15 @@ def _upsert_league(cur, api_league_id: int, league_obj: dict) -> str:
         VALUES (%s, %s, %s, %s)
         ON CONFLICT (api_league_id)
         DO UPDATE SET
-          name = COALESCE(EXCLUDED.name, leagues.name),
-          country = COALESCE(EXCLUDED.country, leagues.country),
-          logo = COALESCE(EXCLUDED.logo, leagues.logo)
+            name    = COALESCE(EXCLUDED.name, leagues.name),
+            country = COALESCE(EXCLUDED.country, leagues.country),
+            logo    = COALESCE(EXCLUDED.logo, leagues.logo)
         RETURNING id;
         """,
         (api_league_id, name, country, logo),
     )
     row = cur.fetchone()
+    # cu row_factory=dict_row, row e dict
     return str(row["id"])
 
 
@@ -129,38 +129,39 @@ async def sync_fixtures(
                     if not api_fixture_id:
                         continue
 
-                    # UPSERT fixture
+                    raw_json = json.dumps(item, ensure_ascii=False)
+
                     cur.execute(
                         """
                         INSERT INTO fixtures (
-                          league_id, season, api_fixture_id,
-                          fixture_date, status, status_short,
-                          home_team_id, home_team, away_team_id, away_team,
-                          home_goals, away_goals,
-                          run_type, raw
+                            league_id, season, api_fixture_id,
+                            fixture_date, status, status_short,
+                            home_team_id, home_team, away_team_id, away_team,
+                            home_goals, away_goals,
+                            run_type, raw
                         )
                         VALUES (
-                          %s, %s, %s,
-                          %s, %s, %s,
-                          %s, %s, %s, %s,
-                          %s, %s,
-                          %s, %s
+                            %s, %s, %s,
+                            %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s, %s,
+                            %s, %s
                         )
                         ON CONFLICT (api_fixture_id)
                         DO UPDATE SET
-                          league_id = EXCLUDED.league_id,
-                          season = EXCLUDED.season,
-                          fixture_date = COALESCE(EXCLUDED.fixture_date, fixtures.fixture_date),
-                          status = COALESCE(EXCLUDED.status, fixtures.status),
-                          status_short = COALESCE(EXCLUDED.status_short, fixtures.status_short),
-                          home_team_id = COALESCE(EXCLUDED.home_team_id, fixtures.home_team_id),
-                          home_team = COALESCE(EXCLUDED.home_team, fixtures.home_team),
-                          away_team_id = COALESCE(EXCLUDED.away_team_id, fixtures.away_team_id),
-                          away_team = COALESCE(EXCLUDED.away_team, fixtures.away_team),
-                          home_goals = COALESCE(EXCLUDED.home_goals, fixtures.home_goals),
-                          away_goals = COALESCE(EXCLUDED.away_goals, fixtures.away_goals),
-                          run_type = EXCLUDED.run_type,
-                          raw = EXCLUDED.raw
+                            league_id    = EXCLUDED.league_id,
+                            season       = EXCLUDED.season,
+                            fixture_date = COALESCE(EXCLUDED.fixture_date, fixtures.fixture_date),
+                            status       = COALESCE(EXCLUDED.status, fixtures.status),
+                            status_short = COALESCE(EXCLUDED.status_short, fixtures.status_short),
+                            home_team_id = COALESCE(EXCLUDED.home_team_id, fixtures.home_team_id),
+                            home_team    = COALESCE(EXCLUDED.home_team, fixtures.home_team),
+                            away_team_id = COALESCE(EXCLUDED.away_team_id, fixtures.away_team_id),
+                            away_team    = COALESCE(EXCLUDED.away_team, fixtures.away_team),
+                            home_goals   = COALESCE(EXCLUDED.home_goals, fixtures.home_goals),
+                            away_goals   = COALESCE(EXCLUDED.away_goals, fixtures.away_goals),
+                            run_type     = EXCLUDED.run_type,
+                            raw          = EXCLUDED.raw
                         RETURNING (xmax = 0) AS inserted;
                         """,
                         (
@@ -177,9 +178,10 @@ async def sync_fixtures(
                             fields["home_goals"],
                             fields["away_goals"],
                             run_type,
-                            Json(item),
+                            raw_json,
                         ),
                     )
+
                     r = cur.fetchone()
                     if r and r.get("inserted"):
                         inserted += 1

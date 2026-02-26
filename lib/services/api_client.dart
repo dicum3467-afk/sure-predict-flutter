@@ -1,6 +1,10 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+/// Client HTTP simplu pentru backend-ul tău.
+/// - suportă query params normale
+/// - suportă liste ca parametru repetat: league_ids=a&league_ids=b
+/// - aruncă Exception pentru non-2xx
 class ApiClient {
   final String baseUrl;
   final http.Client _http;
@@ -10,74 +14,69 @@ class ApiClient {
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client();
 
-  /// Build URI with support for:
-  /// - scalar query params
-  /// - list query params (repeated key): k=v1&k=v2
   Uri _buildUri(String path, Map<String, dynamic>? query) {
-    final base = Uri.parse(baseUrl);
+    final normalizedBase = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
 
-    // Ensure path joins correctly (avoid //)
-    final cleanBasePath = base.path.endsWith('/')
-        ? base.path.substring(0, base.path.length - 1)
-        : base.path;
-    final cleanPath = path.startsWith('/') ? path : '/$path';
+    final normalizedPath = path.startsWith('/') ? path : '/$path';
 
-    final qp = <String, List<String>>{};
+    final uri = Uri.parse('$normalizedBase$normalizedPath');
 
-    if (query != null && query.isNotEmpty) {
-      for (final entry in query.entries) {
-        final key = entry.key;
-        final value = entry.value;
+    if (query == null || query.isEmpty) return uri;
 
-        if (value == null) continue;
+    final qpAll = <String, List<String>>{};
 
-        // List/Iterable => repeat param
-        if (value is Iterable) {
-          for (final item in value) {
-            if (item == null) continue;
-            final s = item.toString().trim();
-            if (s.isEmpty) continue;
-            qp.putIfAbsent(key, () => <String>[]).add(s);
-          }
-          continue;
-        }
-
-        // Normal scalar
-        final s = value.toString().trim();
-        if (s.isEmpty) continue;
-        qp.putIfAbsent(key, () => <String>[]).add(s);
-      }
+    void addOne(String key, String value) {
+      qpAll.putIfAbsent(key, () => <String>[]).add(value);
     }
 
-    return Uri(
-      scheme: base.scheme,
-      userInfo: base.userInfo,
-      host: base.host,
-      port: base.hasPort ? base.port : null,
-      path: '$cleanBasePath$cleanPath',
-      queryParametersAll: qp.isEmpty ? null : qp,
-    );
+    query.forEach((key, value) {
+      if (value == null) return;
+
+      // liste: league_ids=[a,b] => league_ids=a&league_ids=b
+      if (value is Iterable) {
+        for (final v in value) {
+          if (v == null) continue;
+          final s = v.toString().trim();
+          if (s.isEmpty) continue;
+          addOne(key, s);
+        }
+        return;
+      }
+
+      // simplu
+      final s = value.toString().trim();
+      if (s.isEmpty) return;
+      addOne(key, s);
+    });
+
+    if (qpAll.isEmpty) return uri;
+    return uri.replace(queryParametersAll: qpAll);
   }
 
-  Future<Map<String, dynamic>> getJson(
+  Future<dynamic> getJson(
     String path, {
     Map<String, dynamic>? queryParameters,
+    Map<String, String>? headers,
   }) async {
     final uri = _buildUri(path, queryParameters);
 
     final res = await _http.get(
       uri,
-      headers: const {'accept': 'application/json'},
+      headers: <String, String>{
+        'accept': 'application/json',
+        ...?headers,
+      },
     );
 
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('HTTP ${res.statusCode}: ${res.body}');
     }
 
-    final decoded = jsonDecode(res.body);
-
-    // Dacă serverul întoarce listă, o împachetăm ca {'data': ...}
-    if (decoded is Map<String, dynamic>) return decoded;
-    return {'data': decoded};
+    if (res.body.isEmpty) return null;
+    return jsonDecode(res.body);
   }
+
+  void close() => _http.close();
 }

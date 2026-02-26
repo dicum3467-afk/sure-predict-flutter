@@ -1,27 +1,37 @@
-from sqlalchemy import BigInteger, Integer, String, DateTime, JSON, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Column, Integer, String, BigInteger, DateTime, JSON, UniqueConstraint
+from sqlalchemy.sql import func
 
 from app.db import Base
+
 
 class Fixture(Base):
     __tablename__ = "fixtures"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True, index=True)
 
-    # ID-ul fixture-ului de la API-Football (unic)
-    fixture_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # id-ul oficial din API-Football
+    fixture_id = Column(Integer, nullable=False, index=True)
 
-    league_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    league_id = Column(Integer, nullable=False, index=True)
+    season = Column(Integer, nullable=False, index=True)
 
-    utc_date: Mapped[str | None] = mapped_column(String, nullable=True)  # ex: "2024-08-16T19:00:00+00:00"
-    timestamp: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # data utc (string ISO din API) o păstrăm ca string simplu (merge ok)
+    utc_date = Column(String, nullable=True)
 
-    status_short: Mapped[str | None] = mapped_column(String, nullable=True)  # NS/FT/1H etc
-    home_team: Mapped[str | None] = mapped_column(String, nullable=True)
-    away_team: Mapped[str | None] = mapped_column(String, nullable=True)
+    # unix timestamp
+    timestamp = Column(BigInteger, nullable=True)
 
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # NS / FT / 1H / HT / 2H etc
+    status_short = Column(String, nullable=True, index=True)
+
+    home_team = Column(String, nullable=True)
+    away_team = Column(String, nullable=True)
+
+    # tot json-ul brut din API-Football
+    payload = Column(JSON, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     __table_args__ = (
         UniqueConstraint("fixture_id", name="uq_fixtures_fixture_id"),

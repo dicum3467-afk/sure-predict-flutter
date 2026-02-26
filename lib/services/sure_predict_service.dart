@@ -17,18 +17,17 @@ class SurePredictService {
 
   // ---------------- LEAGUES ----------------
   Future<List<Map<String, dynamic>>> getLeagues() async {
-    // cache key
     const key = 'leagues';
     final cached = _cache.get<List<Map<String, dynamic>>>(key);
     if (cached != null) return cached;
 
     final data = await _api.getJson('/leagues');
-    final list = List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
+    final list = List<Map<String, dynamic>>.from(data is Map ? (data['items'] ?? []) : (data ?? []));
     _cache.put(key, list);
     return list;
   }
 
-  // ---------------- FIXTURES ----------------
+  // --------------- FIXTURES ----------------
   String _stableEncodeQuery(Map<String, dynamic> query) {
     final keys = query.keys.toList()..sort();
     final out = <String, dynamic>{};
@@ -50,23 +49,30 @@ class SurePredictService {
     return '$path?${_stableEncodeQuery(query)}';
   }
 
+  /// IMPORTANT:
+  /// Backend-ul (Swagger-ul tău) are parametrii: status, date_from, date_to, run_type, limit, offset.
+  /// NU trimitem leagueIds aici. Filtrarea pe ligi o facem în UI.
   Future<List<Map<String, dynamic>>> getFixtures({
-    required Iterable<String> leagueIds, // acceptă Set sau List
-    required String from,
-    required String to,
+    required String from, // ISO8601
+    required String to, // ISO8601
     int limit = 50,
     int offset = 0,
     String status = 'all', // all/scheduled/live/finished
+    String runType = 'initial',
     bool force = false,
   }) async {
     final query = <String, dynamic>{
-      'leagueIds': leagueIds.map((e) => e.toString()).toList(),
-      'from': from,
-      'to': to,
+      'date_from': from,
+      'date_to': to,
+      'run_type': runType,
       'limit': limit,
       'offset': offset,
-      'status': status,
     };
+
+    // doar dacă nu e "all"
+    if (status != 'all') {
+      query['status'] = status;
+    }
 
     final key = _cacheKey('/fixtures', query);
 
@@ -75,25 +81,32 @@ class SurePredictService {
       if (cached != null) return cached;
     }
 
+    // Dacă ApiClient-ul tău NU are queryParameters, schimbă linia de jos cu:
+    // final data = await _api.getJson('/fixtures', query: query);
     final data = await _api.getJson('/fixtures', queryParameters: query);
-    final list = List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
+
+    final list = List<Map<String, dynamic>>.from(
+      data is Map ? (data['items'] ?? []) : (data ?? []),
+    );
+
     _cache.put(key, list);
     return list;
   }
 
-  // ---------------- PREDICTION ----------------
+  // -------------- PREDICTION ---------------
   Future<Map<String, dynamic>> getPrediction({required String providerFixtureId}) async {
-    final data = await _api.getJson('/prediction', queryParameters: {
-      'provider_fixture_id': providerFixtureId,
-    });
-
+    // Dacă ApiClient-ul tău NU are queryParameters, schimbă cu query: {...}
+    final data = await _api.getJson(
+      '/prediction',
+      queryParameters: {'provider_fixture_id': providerFixtureId},
+    );
     return Map<String, dynamic>.from(data ?? const {});
   }
 
-  // ---------------- TOP PICKS ----------------
+  // -------------- TOP PICKS ----------------
   Future<List<Map<String, dynamic>>> getTopPicks({
-    required Iterable<String> leagueIds, // acceptă Set/List
-    required double threshold, // ex: 0.60
+    required Iterable<String> leagueIds,
+    required double threshold,
     bool topPerLeague = false,
     String status = 'all',
     bool force = false,
@@ -115,13 +128,16 @@ class SurePredictService {
     }
 
     final data = await _api.getJson('/top-picks', queryParameters: query);
-    final list = List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
+    final list = List<Map<String, dynamic>>.from(
+      data is Map ? (data['items'] ?? []) : (data ?? []),
+    );
+
     _cache.put(key, list);
     return list;
   }
 
-  // ---------------- CACHE CONTROL ----------------
+  // -------------- CACHE CONTROL ------------
   Future<void> clearCache() async {
-    await _cache.clearAll();
+    _cache.clearAll();
   }
 }

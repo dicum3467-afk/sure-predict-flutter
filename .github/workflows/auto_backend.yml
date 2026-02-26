@@ -1,0 +1,42 @@
+name: Auto backend smart
+
+on:
+  schedule:
+    # ping la fiecare 30 min
+    - cron: "*/30 * * * *"
+
+    # sync dimineața + seara (UTC)
+    - cron: "15 4 * * *"
+    - cron: "15 18 * * *"
+
+  workflow_dispatch: {}
+
+jobs:
+  keep_alive_daytime:
+    runs-on: ubuntu-latest
+
+    # rulează DOAR între 06–21 UTC (~08–23 RO)
+    if: |
+      github.event_name == 'schedule' &&
+      (github.event.schedule == '*/30 * * * *') &&
+      (
+        (fromJSON('["06","07","08","09","10","11","12","13","14","15","16","17","18","19","20","21"]')
+          contains(format('{0:02}', github.run_attempt)))
+      )
+
+    steps:
+      - name: Ping /health
+        run: |
+          curl -sS "${{ secrets.BACKEND_URL }}/health" \
+            -H "accept: application/json" >/dev/null
+
+  sync_fixtures:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '15 4 * * *' || github.event.schedule == '15 18 * * *'
+
+    steps:
+      - name: Call /fixtures/sync
+        run: |
+          curl -sS -X POST "${{ secrets.BACKEND_URL }}/fixtures/sync?days=7" \
+            -H "x-sync-token: ${{ secrets.SYNC_TOKEN }}" \
+            -H "accept: application/json"

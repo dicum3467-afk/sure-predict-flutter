@@ -1,10 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-/// Client HTTP simplu pentru backend-ul tău.
-/// - suportă query params normale
-/// - suportă liste ca parametru repetat: league_ids=a&league_ids=b
-/// - aruncă Exception pentru non-2xx
 class ApiClient {
   final String baseUrl;
   final http.Client _http;
@@ -14,69 +10,65 @@ class ApiClient {
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client();
 
+  /// Construiește URL corect + query params
+  /// - suportă listă => repeat param: league_ids=a&league_ids=b
   Uri _buildUri(String path, Map<String, dynamic>? query) {
-    final normalizedBase = baseUrl.endsWith('/')
-        ? baseUrl.substring(0, baseUrl.length - 1)
-        : baseUrl;
+    final base = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    final p = path.startsWith('/') ? path : '/$path';
+    final url = '$base$p';
 
-    final normalizedPath = path.startsWith('/') ? path : '/$path';
-
-    final uri = Uri.parse('$normalizedBase$normalizedPath');
-
-    if (query == null || query.isEmpty) return uri;
-
-    final qpAll = <String, List<String>>{};
-
-    void addOne(String key, String value) {
-      qpAll.putIfAbsent(key, () => <String>[]).add(value);
+    if (query == null || query.isEmpty) {
+      return Uri.parse(url);
     }
+
+    final uri = Uri.parse(url);
+
+    final pairs = <MapEntry<String, String>>[];
 
     query.forEach((key, value) {
       if (value == null) return;
 
-      // liste: league_ids=[a,b] => league_ids=a&league_ids=b
       if (value is Iterable) {
         for (final v in value) {
           if (v == null) continue;
           final s = v.toString().trim();
           if (s.isEmpty) continue;
-          addOne(key, s);
+          pairs.add(MapEntry(key, s));
         }
-        return;
+      } else {
+        final s = value.toString().trim();
+        if (s.isEmpty) return;
+        pairs.add(MapEntry(key, s));
       }
-
-      // simplu
-      final s = value.toString().trim();
-      if (s.isEmpty) return;
-      addOne(key, s);
     });
 
-    if (qpAll.isEmpty) return uri;
-    return uri.replace(queryParametersAll: qpAll);
+    // reconstrucție query string cu repeat keys
+    final q = pairs
+        .map((e) =>
+            '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
+        .join('&');
+
+    return uri.replace(query: q);
   }
 
   Future<dynamic> getJson(
     String path, {
     Map<String, dynamic>? queryParameters,
-    Map<String, String>? headers,
   }) async {
     final uri = _buildUri(path, queryParameters);
 
-    final res = await _http.get(
-      uri,
-      headers: <String, String>{
-        'accept': 'application/json',
-        ...?headers,
-      },
-    );
+    final res = await _http.get(uri, headers: {
+      'accept': 'application/json',
+    });
 
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('HTTP ${res.statusCode}: ${res.body}');
     }
 
-    if (res.body.isEmpty) return null;
-    return jsonDecode(res.body);
-  }
+    // dacă e gol
+    if (res.body.trim().isEmpty) return null;
 
-  void close() => _http.close();
+    final decoded = jsonDecode(res.body);
+    return decoded;
+  }
 }

@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routes.leagues import router as leagues_router
 from app.routes.fixtures import router as fixtures_router
 from app.routes.fixtures_by_league import router as fixtures_by_league_router
-from app.routes.fixtures_sync import router as fixtures_sync_router
+from .routes.fixtures_sync import router as fixtures_sync_router
 
 # dacă ai și prediction router separat, îl includem (dacă nu există fișierul, comentează)
 try:

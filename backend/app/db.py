@@ -13,10 +13,9 @@ def get_db_url() -> str:
 def get_conn():
     """
     Returnează o conexiune psycopg (v3) la Postgres (Render).
-    Va returna rândurile ca dict (cheie=coloană).
     """
     return psycopg.connect(
         get_db_url(),
         connect_timeout=10,
-        row_factory=dict_row,
+        row_factory=dict_row,  # rezultate ca dict
     )

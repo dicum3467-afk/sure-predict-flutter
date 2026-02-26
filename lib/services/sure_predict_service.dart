@@ -16,18 +16,27 @@ class SurePredictService {
   }
 
   // ---------------- LEAGUES ----------------
-  Future<List<Map<String, dynamic>>> getLeagues() async {
+  Future<List<Map<String, dynamic>>> getLeagues({bool force = false}) async {
+    const path = '/leagues';
     const key = 'leagues';
-    final cached = _cache.get<List<Map<String, dynamic>>>(key);
-    if (cached != null) return cached;
 
-    final data = await _api.getJson('/leagues');
-    final list = List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
+    if (!force) {
+      final cached = _cache.get<List<Map<String, dynamic>>>(key);
+      if (cached != null) return cached;
+    }
+
+    final data = await _api.getJson(path);
+
+    // Backend returnează listă direct: [...]
+    final list = (data is List)
+        ? data.map((e) => Map<String, dynamic>.from(e as Map)).toList()
+        : <Map<String, dynamic>>[];
+
     _cache.put(key, list);
     return list;
   }
 
-  // ---------------- FIXTURES ----------------
+  // ------------- helpers cache key -------------
   String _stableEncodeQuery(Map<String, dynamic> query) {
     final keys = query.keys.toList()..sort();
     final out = <String, dynamic>{};
@@ -46,86 +55,108 @@ class SurePredictService {
 
   String _cacheKey(String path, Map<String, dynamic> query) {
     if (query.isEmpty) return path;
-    return '$path?${_stableEncodeQuery(query)}';
+    return '$path#${_stableEncodeQuery(query)}';
   }
 
+  // ---------------- FIXTURES ----------------
   Future<List<Map<String, dynamic>>> getFixtures({
-    required Iterable<String> leagueIds,
-    required String from,
-    required String to,
-    int limit = 50,
+    List<String>? leagueIds,        // OPTIONAL
+    String? dateFrom,               // ISO string optional (ex: 2026-02-24 or 2026-02-24T00:00:00Z)
+    String? dateTo,                 // ISO string optional
+    String runType = 'initial',
+    int limit = 200,
     int offset = 0,
-    String status = 'all', // all/scheduled/live/finished
+    String status = 'all',          // all/scheduled/live/finished
     bool force = false,
   }) async {
     final query = <String, dynamic>{
-      'leagueIds': leagueIds.map((e) => e.toString()).toList(),
-      'from': from,
-      'to': to,
+      'run_type': runType,
       'limit': limit,
       'offset': offset,
     };
 
-    // IMPORTANT: backend-ul tău NU acceptă status=all.
-    // Pentru "all", NU trimitem parametrul status deloc.
+    // league_ids (repeat param) doar dacă există
+    if (leagueIds != null && leagueIds.isNotEmpty) {
+      query['league_ids'] = leagueIds;
+    }
+
+    // date filters doar dacă sunt setate
+    if (dateFrom != null && dateFrom.trim().isNotEmpty) {
+      query['date_from'] = dateFrom.trim();
+    }
+    if (dateTo != null && dateTo.trim().isNotEmpty) {
+      query['date_to'] = dateTo.trim();
+    }
+
+    // status: pentru 'all' nu trimitem deloc
     final s = status.trim().toLowerCase();
     if (s.isNotEmpty && s != 'all') {
       query['status'] = s;
     }
 
     final key = _cacheKey('/fixtures', query);
-
     if (!force) {
       final cached = _cache.get<List<Map<String, dynamic>>>(key);
       if (cached != null) return cached;
     }
 
     final data = await _api.getJson('/fixtures', queryParameters: query);
-    final list = List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
+
+    // Backend returnează listă direct: [...]
+    final list = (data is List)
+        ? data.map((e) => Map<String, dynamic>.from(e as Map)).toList()
+        : <Map<String, dynamic>>[];
+
     _cache.put(key, list);
     return list;
   }
 
   // ---------------- PREDICTION ----------------
-  Future<Map<String, dynamic>> getPrediction({required String providerFixtureId}) async {
-    final data = await _api.getJson(
-      '/prediction',
-      queryParameters: {'provider_fixture_id': providerFixtureId},
-    );
-    return Map<String, dynamic>.from(data ?? const {});
+  Future<Map<String, dynamic>> getPrediction(String providerFixtureId) async {
+    // Backend: GET /fixtures/{provider_fixture_id}/prediction
+    final data = await _api.getJson('/fixtures/$providerFixtureId/prediction');
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return <String, dynamic>{};
   }
 
   // ---------------- TOP PICKS ----------------
   Future<List<Map<String, dynamic>>> getTopPicks({
-    required Iterable<String> leagueIds,
+    List<String>? leagueIds,     // OPTIONAL
     required double threshold,
     bool topPerLeague = false,
+    String runType = 'initial',
     String status = 'all',
-    bool force = false,
     int limit = 200,
+    bool force = false,
   }) async {
     final query = <String, dynamic>{
-      'leagueIds': leagueIds.map((e) => e.toString()).toList(),
       'threshold': threshold,
       'topPerLeague': topPerLeague,
       'limit': limit,
+      'run_type': runType,
     };
 
-    // La fel: pentru "all" NU trimitem status.
+    if (leagueIds != null && leagueIds.isNotEmpty) {
+      query['league_ids'] = leagueIds;
+    }
+
     final s = status.trim().toLowerCase();
     if (s.isNotEmpty && s != 'all') {
       query['status'] = s;
     }
 
     final key = _cacheKey('/top-picks', query);
-
     if (!force) {
       final cached = _cache.get<List<Map<String, dynamic>>>(key);
       if (cached != null) return cached;
     }
 
     final data = await _api.getJson('/top-picks', queryParameters: query);
-    final list = List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
+
+    final list = (data is List)
+        ? data.map((e) => Map<String, dynamic>.from(e as Map)).toList()
+        : <Map<String, dynamic>>[];
+
     _cache.put(key, list);
     return list;
   }

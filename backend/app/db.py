@@ -1,18 +1,20 @@
+# backend/app/db.py
 import os
+from typing import Optional
+
 import psycopg2
+from psycopg2.extensions import connection as PGConnection
 
+_DB_URL: Optional[str] = None
 
-def get_conn():
-    """
-    Returnează o conexiune psycopg2 folosind DATABASE_URL din env.
-    Render pune de obicei DATABASE_URL automat dacă ai Postgres atașat.
-    """
-    db_url = os.getenv("DATABASE_URL")
+def get_db_url() -> Optional[str]:
+    global _DB_URL
+    if _DB_URL is None:
+        _DB_URL = os.getenv("DATABASE_URL")
+    return _DB_URL
+
+def get_conn() -> PGConnection:
+    db_url = get_db_url()
     if not db_url:
         raise RuntimeError("Missing DATABASE_URL env var")
-
-    # Render uneori dă postgres://; psycopg2 preferă postgresql://
-    if db_url.startswith("postgres://"):
-        db_url = db_url.replace("postgres://", "postgresql://", 1)
-
-    return psycopg2.connect(db_url)
+    return psycopg2.connect(db_url, sslmode="require")

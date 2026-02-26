@@ -1,19 +1,20 @@
 import 'package:flutter/material.dart';
 
 import '../services/sure_predict_service.dart';
-import '../state/leagues_store.dart';
 import '../state/favorites_store.dart';
 
 class FixturesScreen extends StatefulWidget {
   final SurePredictService service;
-  final LeaguesStore leaguesStore;
   final FavoritesStore favoritesStore;
+
+  /// Ligi selectate / toate ligile (trimise din FixturesTab)
+  final List<String> leagueIds;
 
   const FixturesScreen({
     super.key,
     required this.service,
-    required this.leaguesStore,
     required this.favoritesStore,
+    required this.leagueIds,
   });
 
   @override
@@ -35,19 +36,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
   @override
   void initState() {
     super.initState();
-    _status = 'all';
     _initialLoad();
-  }
-
-  List<String> _allLeagueIds() {
-    // ia toate ligile încărcate
-    final ids = <String>[];
-    for (final l in widget.leaguesStore.items) {
-      final v = l['id'] ?? l['league_id'] ?? l['leagueId'];
-      final id = (v ?? '').toString();
-      if (id.isNotEmpty) ids.add(id);
-    }
-    return ids;
   }
 
   Future<void> _initialLoad({bool force = false}) async {
@@ -60,11 +49,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
     });
 
     try {
-      if (widget.leaguesStore.items.isEmpty && !widget.leaguesStore.isLoading) {
-        await widget.leaguesStore.load();
-      }
-
-      final leagueIds = _allLeagueIds();
+      final leagueIds = widget.leagueIds;
       if (leagueIds.isEmpty) {
         setState(() => _loading = false);
         return;
@@ -84,9 +69,10 @@ class _FixturesScreenState extends State<FixturesScreen> {
       );
 
       final page = List<Map<String, dynamic>>.from(data);
+
       setState(() {
         _items.addAll(page);
-        _offset += page.length; // IMPORTANT: page.length e int (rezolvă eroarea int/double)
+        _offset += page.length; // IMPORTANT: int
         _hasMore = page.length == _limit;
         _loading = false;
       });
@@ -103,7 +89,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
     setState(() => _loadingMore = true);
 
     try {
-      final leagueIds = _allLeagueIds();
+      final leagueIds = widget.leagueIds;
       if (leagueIds.isEmpty) return;
 
       final from = DateTime.now().toUtc();
@@ -120,6 +106,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
       );
 
       final page = List<Map<String, dynamic>>.from(data);
+
       setState(() {
         _items.addAll(page);
         _offset += page.length;
@@ -136,6 +123,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) return Center(child: Text('Eroare: $_error'));
+    if (_items.isEmpty) return const Center(child: Text('No fixtures'));
 
     return Column(
       children: [
@@ -168,7 +156,6 @@ class _FixturesScreenState extends State<FixturesScreen> {
               itemBuilder: (context, i) {
                 if (i == _items.length) {
                   if (_hasMore) {
-                    // trigger load more
                     _loadMore();
                     return const Padding(
                       padding: EdgeInsets.all(16),
@@ -185,9 +172,9 @@ class _FixturesScreenState extends State<FixturesScreen> {
                 final time = (it['time'] ?? it['date'] ?? it['kickoff'] ?? '').toString();
 
                 return ListTile(
+                  leading: const Icon(Icons.sports_soccer),
                   title: Text('$home vs $away'),
                   subtitle: Text([league, time].where((e) => e.isNotEmpty).join(' • ')),
-                  leading: const Icon(Icons.sports_soccer),
                 );
               },
             ),

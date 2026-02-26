@@ -1,11 +1,12 @@
 import 'dart:convert';
+
 import '../core/cache/simple_cache.dart';
 import 'api_client.dart';
 
 class SurePredictService {
   final ApiClient _api;
 
-  // cache general (15 minute)
+  // Cache general (15 minute)
   final SimpleCache _cache = SimpleCache(ttl: const Duration(minutes: 15));
 
   SurePredictService(this._api);
@@ -14,73 +15,135 @@ class SurePredictService {
     await _api.getJson('/health');
   }
 
-  // ---------------- LEAGUES ----------------
-  Future<List<Map<String, dynamic>>> getLeagues({bool active = true}) async {
+  // -------- LEAGUES --------
+  Future<List<Map<String, dynamic>>> getLeagues({bool force = false}) async {
     const key = 'leagues';
-    final cached = _cache.get<List<Map<String, dynamic>>>(key);
-    if (cached != null) return cached;
+
+    if (!force) {
+      final cached = _cache.get<List<Map<String, dynamic>>>(key);
+      if (cached != null) return cached;
+    }
 
     final data = await _api.getJson('/leagues', queryParameters: {
-      'active': active.toString(), // backend primește bool; string merge ok
+      'active': 'true',
     });
 
-    final list = (data is List) ? data : <dynamic>[];
-    final out = List<Map<String, dynamic>>.from(list.map((e) => Map<String, dynamic>.from(e)));
+    final list =
+        List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
 
-    _cache.put(key, out);
-    return out;
+    _cache.put(key, list);
+    return list;
   }
 
-  // ---------------- FIXTURES ----------------
+  // -------- helpers cache key --------
+  String _stableEncodeQuery(Map<String, dynamic> query) {
+    final keys = query.keys.toList()..sort();
+    final out = <String, dynamic>{};
+
+    for (final k in keys) {
+      final v = query[k];
+      if (v is Iterable) {
+        final l = v.map((e) => e.toString()).toList()..sort();
+        out[k] = l;
+      } else {
+        out[k] = v;
+      }
+    }
+    return jsonEncode(out);
+  }
+
+  String _cacheKey(String path, Map<String, dynamic> query) {
+    if (query.isEmpty) return path;
+    return '$path?${_stableEncodeQuery(query)}';
+  }
+
+  // -------- FIXTURES --------
   Future<List<Map<String, dynamic>>> getFixtures({
-    required Iterable<String> leagueIds,
-    String? dateFrom, // ISO string, ex: "2026-02-24" sau "2026-02-24T00:00:00Z"
-    String? dateTo,
-    String runType = 'initial',
+    Iterable<String>? leagueIds,
     int limit = 50,
     int offset = 0,
-    String status = 'all', // all/scheduled/live/finished
+    String status = 'all',
+    String runType = 'initial',
     bool force = false,
   }) async {
-    // backend-ul tău folosește: league_ids, date_from, date_to, run_type, status, limit, offset
     final query = <String, dynamic>{
-      'league_ids': leagueIds.toList(),
       'run_type': runType,
       'limit': limit,
       'offset': offset,
     };
 
-    if (dateFrom != null && dateFrom.trim().isNotEmpty) query['date_from'] = dateFrom.trim();
-    if (dateTo != null && dateTo.trim().isNotEmpty) query['date_to'] = dateTo.trim();
+    if (leagueIds != null && leagueIds.isNotEmpty) {
+      query['league_ids'] = leagueIds.map((e) => e.toString()).toList();
+    }
 
     final s = status.trim().toLowerCase();
     if (s.isNotEmpty && s != 'all') {
       query['status'] = s;
     }
 
-    final cacheKey = 'fixtures:${jsonEncode(query)}';
+    final key = _cacheKey('/fixtures', query);
+
     if (!force) {
-      final cached = _cache.get<List<Map<String, dynamic>>>(cacheKey);
+      final cached = _cache.get<List<Map<String, dynamic>>>(key);
       if (cached != null) return cached;
     }
 
     final data = await _api.getJson('/fixtures', queryParameters: query);
 
-    final list = (data is List) ? data : <dynamic>[];
-    final out = List<Map<String, dynamic>>.from(list.map((e) => Map<String, dynamic>.from(e)));
+    final list =
+        List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
 
-    _cache.put(cacheKey, out);
-    return out;
+    _cache.put(key, list);
+    return list;
   }
 
-  // ---------------- PREDICTION ----------------
-  Future<Map<String, dynamic>> getPrediction({required String providerFixtureId}) async {
-    final data = await _api.getJson('/fixtures/$providerFixtureId/prediction');
-    if (data is Map) return Map<String, dynamic>.from(data);
-    return <String, dynamic>{};
+  // -------- PREDICTION --------
+  Future<Map<String, dynamic>> getPrediction({
+    required String providerFixtureId,
+  }) async {
+    final data = await _api.getJson(
+      '/fixtures/$providerFixtureId/prediction',
+    );
+    return Map<String, dynamic>.from(data['prediction'] ?? data ?? const {});
   }
 
-  // cache control
+  // -------- TOP PICKS --------
+  Future<List<Map<String, dynamic>>> getTopPicks({
+    required Iterable<String> leagueIds,
+    required double threshold,
+    bool topPerLeague = false,
+    String status = 'all',
+    int limit = 200,
+    bool force = false,
+  }) async {
+    final query = <String, dynamic>{
+      'league_ids': leagueIds.map((e) => e.toString()).toList(),
+      'threshold': threshold,
+      'topPerLeague': topPerLeague,
+      'limit': limit,
+    };
+
+    final s = status.trim().toLowerCase();
+    if (s.isNotEmpty && s != 'all') {
+      query['status'] = s;
+    }
+
+    final key = _cacheKey('/top-picks', query);
+
+    if (!force) {
+      final cached = _cache.get<List<Map<String, dynamic>>>(key);
+      if (cached != null) return cached;
+    }
+
+    final data = await _api.getJson('/top-picks', queryParameters: query);
+
+    final list =
+        List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
+
+    _cache.put(key, list);
+    return list;
+  }
+
   Future<void> clearCache() async {
     await _cache.clearAll();
   }

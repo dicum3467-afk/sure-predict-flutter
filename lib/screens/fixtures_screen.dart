@@ -6,9 +6,7 @@ import '../state/favorites_store.dart';
 class FixturesScreen extends StatefulWidget {
   final SurePredictService service;
   final FavoritesStore favoritesStore;
-
-  /// ligi selectate (poate fi gol => All leagues)
-  final List<String> leagueIds;
+  final List<String> leagueIds; // poate fi gol
 
   const FixturesScreen({
     super.key,
@@ -32,7 +30,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
   final int _limit = 50;
   bool _hasMore = true;
 
-  String _status = 'all'; // all/scheduled/live/finished
+  String _status = 'all';
 
   @override
   void initState() {
@@ -42,8 +40,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
   List<Map<String, dynamic>> _filterBySelectedLeagues(List<Map<String, dynamic>> list) {
     final selected = widget.leagueIds.map((e) => e.toString()).toSet();
-    if (selected.isEmpty) return list; // All leagues
-
+    if (selected.isEmpty) return list;
     return list.where((it) {
       final lid = (it['league_id'] ?? it['leagueId'] ?? '').toString();
       return selected.contains(lid);
@@ -60,12 +57,8 @@ class _FixturesScreenState extends State<FixturesScreen> {
     });
 
     try {
-      final from = DateTime.now().toUtc();
-      final to = from.add(const Duration(days: 7));
-
+      // FIX: fără date_from/date_to (exact ca Swagger-ul tău)
       final data = await widget.service.getFixtures(
-        from: from.toIso8601String(),
-        to: to.toIso8601String(),
         limit: _limit,
         offset: _offset,
         status: _status,
@@ -78,7 +71,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
       setState(() {
         _items.addAll(page);
-        _offset += pageRaw.length; // offset după ce ai primit din server
+        _offset += pageRaw.length;
         _hasMore = pageRaw.length == _limit;
         _loading = false;
       });
@@ -96,12 +89,7 @@ class _FixturesScreenState extends State<FixturesScreen> {
     setState(() => _loadingMore = true);
 
     try {
-      final from = DateTime.now().toUtc();
-      final to = from.add(const Duration(days: 7));
-
       final data = await widget.service.getFixtures(
-        from: from.toIso8601String(),
-        to: to.toIso8601String(),
         limit: _limit,
         offset: _offset,
         status: _status,
@@ -128,12 +116,18 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    if (_loading) return const Center(child: CircularProgressIndicator());
 
     if (_error != null) {
-      return Center(child: Text('Eroare: $_error'));
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            'Eroare la fixtures:\n$_error',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
     }
 
     return Column(
@@ -184,7 +178,6 @@ class _FixturesScreenState extends State<FixturesScreen> {
                       }
 
                       final it = _items[i];
-
                       final home = (it['home'] ?? '').toString();
                       final away = (it['away'] ?? '').toString();
                       final league = (it['league'] ?? it['league_name'] ?? '').toString();

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import '../services/api_client.dart';
@@ -7,7 +6,7 @@ import '../core/cache/simple_cache.dart';
 class SurePredictService {
   final ApiClient _api;
 
-  // Cache 15 minute
+  // Cache general (15 minute)
   final SimpleCache _cache = SimpleCache(ttl: const Duration(minutes: 15));
 
   SurePredictService(this._api);
@@ -23,15 +22,12 @@ class SurePredictService {
     if (cached != null) return cached;
 
     final data = await _api.getJson('/leagues');
-    final list = List<Map<String, dynamic>>.from(
-      data is Map ? (data['items'] ?? []) : (data ?? []),
-    );
-
+    final list = List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
     _cache.put(key, list);
     return list;
   }
 
-  // --------------- FIXTURES ----------------
+  // ---------------- FIXTURES ----------------
   String _stableEncodeQuery(Map<String, dynamic> query) {
     final keys = query.keys.toList()..sort();
     final out = <String, dynamic>{};
@@ -48,32 +44,34 @@ class SurePredictService {
     return jsonEncode(out);
   }
 
-  String _cacheKey(String path, Map<String, dynamic>? query) {
-    if (query == null || query.isEmpty) return path;
+  String _cacheKey(String path, Map<String, dynamic> query) {
+    if (query.isEmpty) return path;
     return '$path?${_stableEncodeQuery(query)}';
   }
 
-  /// FIX IMPORTANT:
-  /// - NU trimitem date_from/date_to by default (ca în Swagger)
-  /// - punem timeout ca să nu rămână spinner infinit
   Future<List<Map<String, dynamic>>> getFixtures({
-    String? dateFrom, // optional: "YYYY-MM-DD"
-    String? dateTo, // optional: "YYYY-MM-DD"
+    required Iterable<String> leagueIds,
+    required String from,
+    required String to,
     int limit = 50,
     int offset = 0,
-    String status = 'all',
-    String runType = 'initial',
+    String status = 'all', // all/scheduled/live/finished
     bool force = false,
   }) async {
     final query = <String, dynamic>{
-      'run_type': runType,
+      'leagueIds': leagueIds.map((e) => e.toString()).toList(),
+      'from': from,
+      'to': to,
       'limit': limit,
       'offset': offset,
     };
 
-    if (status != 'all') query['status'] = status;
-    if (dateFrom != null && dateFrom.isNotEmpty) query['date_from'] = dateFrom;
-    if (dateTo != null && dateTo.isNotEmpty) query['date_to'] = dateTo;
+    // IMPORTANT: backend-ul tău NU acceptă status=all.
+    // Pentru "all", NU trimitem parametrul status deloc.
+    final s = status.trim().toLowerCase();
+    if (s.isNotEmpty && s != 'all') {
+      query['status'] = s;
+    }
 
     final key = _cacheKey('/fixtures', query);
 
@@ -82,28 +80,22 @@ class SurePredictService {
       if (cached != null) return cached;
     }
 
-    // Dacă backend-ul e lent / blocat, nu vrem spinner infinit:
-    final data = await _api
-        .getJson('/fixtures', queryParameters: query)
-        .timeout(const Duration(seconds: 20));
-
-    final list = List<Map<String, dynamic>>.from(
-      data is Map ? (data['items'] ?? []) : (data ?? []),
-    );
-
+    final data = await _api.getJson('/fixtures', queryParameters: query);
+    final list = List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
     _cache.put(key, list);
     return list;
   }
 
-  // -------------- PREDICTION ---------------
+  // ---------------- PREDICTION ----------------
   Future<Map<String, dynamic>> getPrediction({required String providerFixtureId}) async {
-    final data = await _api
-        .getJson('/prediction', queryParameters: {'provider_fixture_id': providerFixtureId})
-        .timeout(const Duration(seconds: 20));
+    final data = await _api.getJson(
+      '/prediction',
+      queryParameters: {'provider_fixture_id': providerFixtureId},
+    );
     return Map<String, dynamic>.from(data ?? const {});
   }
 
-  // -------------- TOP PICKS ----------------
+  // ---------------- TOP PICKS ----------------
   Future<List<Map<String, dynamic>>> getTopPicks({
     required Iterable<String> leagueIds,
     required double threshold,
@@ -116,9 +108,14 @@ class SurePredictService {
       'leagueIds': leagueIds.map((e) => e.toString()).toList(),
       'threshold': threshold,
       'topPerLeague': topPerLeague,
-      'status': status,
       'limit': limit,
     };
+
+    // La fel: pentru "all" NU trimitem status.
+    final s = status.trim().toLowerCase();
+    if (s.isNotEmpty && s != 'all') {
+      query['status'] = s;
+    }
 
     final key = _cacheKey('/top-picks', query);
 
@@ -127,20 +124,14 @@ class SurePredictService {
       if (cached != null) return cached;
     }
 
-    final data = await _api
-        .getJson('/top-picks', queryParameters: query)
-        .timeout(const Duration(seconds: 20));
-
-    final list = List<Map<String, dynamic>>.from(
-      data is Map ? (data['items'] ?? []) : (data ?? []),
-    );
-
+    final data = await _api.getJson('/top-picks', queryParameters: query);
+    final list = List<Map<String, dynamic>>.from(data['items'] ?? data ?? []);
     _cache.put(key, list);
     return list;
   }
 
-  // -------------- CACHE CONTROL ------------
+  // ---------------- CACHE CONTROL ----------------
   Future<void> clearCache() async {
-    _cache.clearAll();
+    await _cache.clearAll();
   }
 }

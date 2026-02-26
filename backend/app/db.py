@@ -1,6 +1,6 @@
 import os
-import psycopg
-from psycopg.rows import dict_row
+import psycopg2
+from psycopg2.rows import dict_row
 
 
 def get_db_url() -> str:
@@ -14,7 +14,7 @@ def get_conn():
     """
     Returnează o conexiune psycopg (v3) la Postgres (Render).
     """
-    return psycopg.connect(
+    return psycopg2.connect(
         get_db_url(),
         connect_timeout=10,
         row_factory=dict_row,  # rezultate ca dict

@@ -1,17 +1,12 @@
 import os
-from datetime import datetime
-from typing import Optional, Any
-
-import httpx
+import json
+from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, Query
-from fastapi.concurrency import run_in_threadpool
 
-from sqlalchemy.orm import Session
-from sqlalchemy import select
+from psycopg2.extras import Json
 
+from app.db import get_conn
 from app.services.api_football import fetch_fixtures
-from app.db import SessionLocal
-from app.models.fixture import Fixture
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -19,124 +14,65 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 def _check_token(x_sync_token: Optional[str]) -> None:
     expected = os.getenv("SYNC_TOKEN")
     if not expected:
-        raise HTTPException(status_code=500, detail="SYNC_TOKEN nu este setat in environment.")
+        raise HTTPException(status_code=500, detail="SYNC_TOKEN not set in environment.")
     if not x_sync_token or x_sync_token.strip() != expected.strip():
         raise HTTPException(status_code=401, detail="Invalid SYNC token")
 
 
-def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
-    if not dt_str:
-        return None
-    # API-Football dă ISO cu timezone (+00:00). Python acceptă cu fromisoformat.
-    try:
-        return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-    except Exception:
-        return None
+def _upsert_league(cur, api_league_id: int, league_obj: dict) -> str:
+    """
+    Creează/actualizează league și returnează league_id (UUID).
+    """
+    name = None
+    country = None
+    logo = None
+
+    # API-Football de obicei: response[i]["league"] = {id,name,country,logo,...}
+    if isinstance(league_obj, dict):
+        name = league_obj.get("name")
+        country = league_obj.get("country")
+        logo = league_obj.get("logo")
+
+    cur.execute(
+        """
+        INSERT INTO leagues (api_league_id, name, country, logo)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (api_league_id)
+        DO UPDATE SET
+          name = COALESCE(EXCLUDED.name, leagues.name),
+          country = COALESCE(EXCLUDED.country, leagues.country),
+          logo = COALESCE(EXCLUDED.logo, leagues.logo)
+        RETURNING id;
+        """,
+        (api_league_id, name, country, logo),
+    )
+    row = cur.fetchone()
+    return str(row["id"])
 
 
-def _upsert_fixtures(db: Session, items: list[dict[str, Any]], league: int, season: int) -> dict:
-    inserted = 0
-    updated = 0
+def _extract_fixture_fields(item: dict) -> dict:
+    """
+    Extrage câmpuri standard din payload API-Football.
+    """
+    fx = item.get("fixture") or {}
+    teams = item.get("teams") or {}
+    goals = item.get("goals") or {}
+    st = fx.get("status") or {}
 
-    for item in items:
-        fx = (item or {}).get("fixture") or {}
-        teams = (item or {}).get("teams") or {}
-        goals = (item or {}).get("goals") or {}
-        league_obj = (item or {}).get("league") or {}
-        status = (fx.get("status") or {})
-
-        fixture_id = fx.get("id")
-        if not fixture_id:
-            continue
-
-        existing = db.execute(
-            select(Fixture).where(Fixture.fixture_id == int(fixture_id))
-        ).scalar_one_or_none()
-
-        payload = item  # salvăm tot ca raw
-
-        if existing is None:
-            obj = Fixture(
-                fixture_id=int(fixture_id),
-                league_id=int(league_obj.get("id")) if league_obj.get("id") else league,
-                season=int(league_obj.get("season")) if league_obj.get("season") else season,
-                date_utc=_parse_dt(fx.get("date")),
-                status_short=status.get("short"),
-                home_team_id=(teams.get("home") or {}).get("id"),
-                away_team_id=(teams.get("away") or {}).get("id"),
-                home_team_name=(teams.get("home") or {}).get("name"),
-                away_team_name=(teams.get("away") or {}).get("name"),
-                home_goals=goals.get("home"),
-                away_goals=goals.get("away"),
-                raw=payload,
-            )
-            db.add(obj)
-            inserted += 1
-        else:
-            # update câmpuri (upsert)
-            existing.league_id = int(league_obj.get("id")) if league_obj.get("id") else existing.league_id
-            existing.season = int(league_obj.get("season")) if league_obj.get("season") else existing.season
-            existing.date_utc = _parse_dt(fx.get("date")) or existing.date_utc
-            existing.status_short = status.get("short") or existing.status_short
-
-            existing.home_team_id = (teams.get("home") or {}).get("id") or existing.home_team_id
-            existing.away_team_id = (teams.get("away") or {}).get("id") or existing.away_team_id
-            existing.home_team_name = (teams.get("home") or {}).get("name") or existing.home_team_name
-            existing.away_team_name = (teams.get("away") or {}).get("name") or existing.away_team_name
-
-            # Goals pot fi None la meciuri neîncepute
-            existing.home_goals = goals.get("home") if goals.get("home") is not None else existing.home_goals
-            existing.away_goals = goals.get("away") if goals.get("away") is not None else existing.away_goals
-
-            existing.raw = payload
-            updated += 1
-
-    db.commit()
-    return {"inserted": inserted, "updated": updated, "total_processed": inserted + updated}
-
-
-def _sync_to_db(league: int, season: int, date_from: Optional[str], date_to: Optional[str], status: Optional[str], next_n: Optional[int]) -> dict:
-    # 1) fetch din API
-    data = None
-    # fetch_fixtures e async, dar aici suntem sync, deci nu-l folosim direct
-    # -> facem request sync cu httpx? Mai simplu: apelăm endpoint-ul async dintr-un helper async nu e ok.
-    # Așa că facem request direct aici sync:
-    api_key = os.getenv("API_FOOTBALL_KEY")
-    if not api_key:
-        raise RuntimeError("Missing API_FOOTBALL_KEY")
-
-    base_url = "https://v3.football.api-sports.io"
-    params: dict[str, Any] = {"league": league, "season": season}
-    if date_from:
-        params["from"] = date_from
-    if date_to:
-        params["to"] = date_to
-    if status:
-        params["status"] = status
-    if next_n:
-        params["next"] = next_n  # pe free poate da eroare, dar tu deja ai văzut asta
-
-    headers = {"x-apisports-key": api_key}
-
-    with httpx.Client(timeout=30) as client:
-        resp = client.get(f"{base_url}/fixtures", params=params, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-
-    items = data.get("response") or []
-    # 2) save în DB
-    db = SessionLocal()
-    try:
-        stats = _upsert_fixtures(db, items, league=league, season=season)
-    finally:
-        db.close()
+    home = teams.get("home") or {}
+    away = teams.get("away") or {}
 
     return {
-        "ok": True,
-        "params": params,
-        "api_results": data.get("results"),
-        "db": stats,
-        "errors": data.get("errors"),
+        "api_fixture_id": (fx.get("id") or item.get("fixture_id")),
+        "fixture_date": fx.get("date"),  # ISO string ok pt Postgres timestamptz
+        "status": st.get("long"),
+        "status_short": st.get("short"),
+        "home_team_id": home.get("id"),
+        "home_team": home.get("name"),
+        "away_team_id": away.get("id"),
+        "away_team": away.get("name"),
+        "home_goals": goals.get("home"),
+        "away_goals": goals.get("away"),
     }
 
 
@@ -147,20 +83,118 @@ async def sync_fixtures(
     date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
     date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
     status: Optional[str] = Query(None, description="NS/FT/1H/HT/2H etc"),
-    next_n: Optional[int] = Query(None, description="Paid ex: 50 (free poate refuza)"),
+    next_n: Optional[int] = Query(None, description="(Paid) next fixtures, ex: 10"),
+    run_type: str = Query("manual", description="manual/initial/daily"),
     x_sync_token: Optional[str] = Header(None, alias="X-Sync-Token"),
 ):
     """
-    Fetch fixtures din API-Football și le salvează/upsert în Postgres.
+    Fetch din API-Football și SALVEAZĂ în Postgres (upsert).
     """
     _check_token(x_sync_token)
 
-    # rulează partea sync (httpx + sqlalchemy) într-un thread ca să nu blocheze event loop
+    data = await fetch_fixtures(
+        league=league,
+        season=season,
+        date_from=date_from,
+        date_to=date_to,
+        status=status,
+        next_n=next_n,
+    )
+
+    items = (data or {}).get("response") or []
+    if not items:
+        return {
+            "ok": True,
+            "saved": 0,
+            "inserted": 0,
+            "updated": 0,
+            "message": "No fixtures in response (nothing to save).",
+            "api_errors": (data or {}).get("errors"),
+        }
+
+    conn = get_conn()
+    inserted = 0
+    updated = 0
+
     try:
-        result = await run_in_threadpool(_sync_to_db, league, season, date_from, date_to, status, next_n)
-        return result
-    except httpx.HTTPStatusError as e:
-        detail = f"API-Football error: {e.response.status_code} - {e.response.text}"
-        raise HTTPException(status_code=502, detail=detail)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        with conn:
+            with conn.cursor() as cur:
+                # încearcă să ia info league din primul item
+                league_obj = (items[0].get("league") or {})
+                league_id = _upsert_league(cur, league, league_obj)
+
+                for item in items:
+                    fields = _extract_fixture_fields(item)
+                    api_fixture_id = fields["api_fixture_id"]
+                    if not api_fixture_id:
+                        continue
+
+                    # UPSERT fixture
+                    cur.execute(
+                        """
+                        INSERT INTO fixtures (
+                          league_id, season, api_fixture_id,
+                          fixture_date, status, status_short,
+                          home_team_id, home_team, away_team_id, away_team,
+                          home_goals, away_goals,
+                          run_type, raw
+                        )
+                        VALUES (
+                          %s, %s, %s,
+                          %s, %s, %s,
+                          %s, %s, %s, %s,
+                          %s, %s,
+                          %s, %s
+                        )
+                        ON CONFLICT (api_fixture_id)
+                        DO UPDATE SET
+                          league_id = EXCLUDED.league_id,
+                          season = EXCLUDED.season,
+                          fixture_date = COALESCE(EXCLUDED.fixture_date, fixtures.fixture_date),
+                          status = COALESCE(EXCLUDED.status, fixtures.status),
+                          status_short = COALESCE(EXCLUDED.status_short, fixtures.status_short),
+                          home_team_id = COALESCE(EXCLUDED.home_team_id, fixtures.home_team_id),
+                          home_team = COALESCE(EXCLUDED.home_team, fixtures.home_team),
+                          away_team_id = COALESCE(EXCLUDED.away_team_id, fixtures.away_team_id),
+                          away_team = COALESCE(EXCLUDED.away_team, fixtures.away_team),
+                          home_goals = COALESCE(EXCLUDED.home_goals, fixtures.home_goals),
+                          away_goals = COALESCE(EXCLUDED.away_goals, fixtures.away_goals),
+                          run_type = EXCLUDED.run_type,
+                          raw = EXCLUDED.raw
+                        RETURNING (xmax = 0) AS inserted;
+                        """,
+                        (
+                            league_id,
+                            season,
+                            api_fixture_id,
+                            fields["fixture_date"],
+                            fields["status"],
+                            fields["status_short"],
+                            fields["home_team_id"],
+                            fields["home_team"],
+                            fields["away_team_id"],
+                            fields["away_team"],
+                            fields["home_goals"],
+                            fields["away_goals"],
+                            run_type,
+                            Json(item),
+                        ),
+                    )
+                    r = cur.fetchone()
+                    if r and r.get("inserted"):
+                        inserted += 1
+                    else:
+                        updated += 1
+
+        return {
+            "ok": True,
+            "saved": inserted + updated,
+            "inserted": inserted,
+            "updated": updated,
+            "league": league,
+            "season": season,
+            "run_type": run_type,
+        }
+
+    finally:
+        conn.close()

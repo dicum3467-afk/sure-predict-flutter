@@ -1,17 +1,11 @@
 import os
-from typing import Optional
-
 import psycopg2
-from psycopg2.extensions import connection as PGConnection
+from psycopg2.extras import RealDictCursor
+
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 
-def get_db_url() -> Optional[str]:
-    return os.getenv("DATABASE_URL")
-
-
-def get_conn() -> PGConnection:
-    db_url = get_db_url()
-    if not db_url:
+def get_conn():
+    if not DATABASE_URL:
         raise RuntimeError("Missing DATABASE_URL env var")
-    # pe Render, Postgres e de obicei cu SSL
-    return psycopg2.connect(db_url, sslmode="require")
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)

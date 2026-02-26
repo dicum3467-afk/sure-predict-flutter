@@ -1,100 +1,90 @@
-from fastapi import APIRouter, HTTPException
-from typing import Optional
+from typing import Optional, List, Dict, Any
+
+from fastapi import APIRouter, HTTPException, Query
 
 from app.db import get_conn
 
-router = APIRouter(prefix="/fixtures", tags=["fixtures"])
+router = APIRouter(tags=["fixtures"])
 
 
-@router.get("/by-league")
+@router.get("/fixtures/by-league")
 def list_fixtures_by_league(
-    league_id: str,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    status: Optional[str] = None,
-    run_type: str = "initial",
-    limit: int = 50,
-    offset: int = 0,
-):
-    """
-    Return fixtures for a league_id (UUID intern din tabela leagues),
-    filtrate optional după date/status și run_type.
-    """
-    if not league_id:
-        raise HTTPException(status_code=400, detail="league_id is required")
-
-    conn = None
+    league_id: str = Query(..., description="UUID (din tabela leagues)"),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    status: Optional[str] = Query(None, description="NS/FT/1H/HT/2H etc"),
+    run_type: Optional[str] = Query(None, description="initial/daily/manual etc (optional)"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> List[Dict[str, Any]]:
     try:
         conn = get_conn()
-        cur = conn.cursor()
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Database not configured (missing DATABASE_URL).")
 
-        where = ["league_id = %s", "run_type = %s"]
-        params = [league_id, run_type]
+    where = ["league_id = %s"]
+    params = [league_id]
 
-        # date_from/date_to sunt string ISO (ex: "2026-02-24" sau "2026-02-24T00:00:00Z")
-        if date_from:
-            where.append("kickoff_at >= %s")
-            params.append(date_from)
+    if date_from:
+        where.append("fixture_date >= %s")
+        params.append(date_from)
+    if date_to:
+        where.append("fixture_date <= %s")
+        params.append(date_to)
+    if status:
+        where.append("status = %s")
+        params.append(status)
+    if run_type:
+        where.append("run_type = %s")
+        params.append(run_type)
 
-        if date_to:
-            where.append("kickoff_at <= %s")
-            params.append(date_to)
+    where_sql = "WHERE " + " AND ".join(where)
 
-        if status:
-            where.append("status = %s")
-            params.append(status)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        id,
+                        league_id,
+                        api_fixture_id,
+                        home_team,
+                        away_team,
+                        fixture_date,
+                        status,
+                        home_goals,
+                        away_goals,
+                        run_type
+                    FROM fixtures
+                    {where_sql}
+                    ORDER BY fixture_date ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (*params, limit, offset),
+                )
+                rows = cur.fetchall()
 
-        q = f"""
-            SELECT
-                id,
-                provider_fixture_id,
-                league_id,
-                kickoff_at,
-                status,
-                home,
-                away,
-                run_type,
-                computed_at,
-                p_home,
-                p_draw,
-                p_away,
-                p_gg,
-                p_over25,
-                p_under25
-            FROM fixtures
-            WHERE {" AND ".join(where)}
-            ORDER BY kickoff_at ASC
-            LIMIT %s OFFSET %s
-        """
-        params.extend([limit, offset])
+        return [
+            {
+                "id": str(r[0]),
+                "league_id": str(r[1]),
+                "api_fixture_id": r[2],
+                "home_team": r[3],
+                "away_team": r[4],
+                "fixture_date": (r[5].isoformat() if hasattr(r[5], "isoformat") else r[5]),
+                "status": r[6],
+                "home_goals": r[7],
+                "away_goals": r[8],
+                "run_type": r[9],
+            }
+            for r in rows
+        ]
 
-        cur.execute(q, params)
-        rows = cur.fetchall()
-
-        out = []
-        for r in rows:
-            out.append(
-                {
-                    "id": str(r[0]),
-                    "provider_fixture_id": str(r[1]) if r[1] is not None else None,
-                    "league_id": str(r[2]) if r[2] is not None else None,
-                    "kickoff_at": r[3],
-                    "status": r[4],
-                    "home": r[5],
-                    "away": r[6],
-                    "run_type": r[7],
-                    "computed_at": r[8],
-                    "p_home": r[9],
-                    "p_draw": r[10],
-                    "p_away": r[11],
-                    "p_gg": r[12],
-                    "p_over25": r[13],
-                    "p_under25": r[14],
-                }
-            )
-
-        cur.close()
-        return out
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
     finally:
-        if conn:
+        try:
             conn.close()
+        except Exception:
+            pass

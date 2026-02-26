@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
 
-from app.services.api_football import fetch_fixtures_by_league
+from ..services.api_football import fetch_fixtures_by_league
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 

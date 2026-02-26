@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import '../services/api_client.dart';
@@ -6,7 +7,7 @@ import '../core/cache/simple_cache.dart';
 class SurePredictService {
   final ApiClient _api;
 
-  // Cache general (15 minute)
+  // Cache 15 minute
   final SimpleCache _cache = SimpleCache(ttl: const Duration(minutes: 15));
 
   SurePredictService(this._api);
@@ -22,7 +23,10 @@ class SurePredictService {
     if (cached != null) return cached;
 
     final data = await _api.getJson('/leagues');
-    final list = List<Map<String, dynamic>>.from(data is Map ? (data['items'] ?? []) : (data ?? []));
+    final list = List<Map<String, dynamic>>.from(
+      data is Map ? (data['items'] ?? []) : (data ?? []),
+    );
+
     _cache.put(key, list);
     return list;
   }
@@ -49,30 +53,27 @@ class SurePredictService {
     return '$path?${_stableEncodeQuery(query)}';
   }
 
-  /// IMPORTANT:
-  /// Backend-ul (Swagger-ul tău) are parametrii: status, date_from, date_to, run_type, limit, offset.
-  /// NU trimitem leagueIds aici. Filtrarea pe ligi o facem în UI.
+  /// FIX IMPORTANT:
+  /// - NU trimitem date_from/date_to by default (ca în Swagger)
+  /// - punem timeout ca să nu rămână spinner infinit
   Future<List<Map<String, dynamic>>> getFixtures({
-    required String from, // ISO8601
-    required String to, // ISO8601
+    String? dateFrom, // optional: "YYYY-MM-DD"
+    String? dateTo, // optional: "YYYY-MM-DD"
     int limit = 50,
     int offset = 0,
-    String status = 'all', // all/scheduled/live/finished
+    String status = 'all',
     String runType = 'initial',
     bool force = false,
   }) async {
     final query = <String, dynamic>{
-      'date_from': from,
-      'date_to': to,
       'run_type': runType,
       'limit': limit,
       'offset': offset,
     };
 
-    // doar dacă nu e "all"
-    if (status != 'all') {
-      query['status'] = status;
-    }
+    if (status != 'all') query['status'] = status;
+    if (dateFrom != null && dateFrom.isNotEmpty) query['date_from'] = dateFrom;
+    if (dateTo != null && dateTo.isNotEmpty) query['date_to'] = dateTo;
 
     final key = _cacheKey('/fixtures', query);
 
@@ -81,9 +82,10 @@ class SurePredictService {
       if (cached != null) return cached;
     }
 
-    // Dacă ApiClient-ul tău NU are queryParameters, schimbă linia de jos cu:
-    // final data = await _api.getJson('/fixtures', query: query);
-    final data = await _api.getJson('/fixtures', queryParameters: query);
+    // Dacă backend-ul e lent / blocat, nu vrem spinner infinit:
+    final data = await _api
+        .getJson('/fixtures', queryParameters: query)
+        .timeout(const Duration(seconds: 20));
 
     final list = List<Map<String, dynamic>>.from(
       data is Map ? (data['items'] ?? []) : (data ?? []),
@@ -95,11 +97,9 @@ class SurePredictService {
 
   // -------------- PREDICTION ---------------
   Future<Map<String, dynamic>> getPrediction({required String providerFixtureId}) async {
-    // Dacă ApiClient-ul tău NU are queryParameters, schimbă cu query: {...}
-    final data = await _api.getJson(
-      '/prediction',
-      queryParameters: {'provider_fixture_id': providerFixtureId},
-    );
+    final data = await _api
+        .getJson('/prediction', queryParameters: {'provider_fixture_id': providerFixtureId})
+        .timeout(const Duration(seconds: 20));
     return Map<String, dynamic>.from(data ?? const {});
   }
 
@@ -127,7 +127,10 @@ class SurePredictService {
       if (cached != null) return cached;
     }
 
-    final data = await _api.getJson('/top-picks', queryParameters: query);
+    final data = await _api
+        .getJson('/top-picks', queryParameters: query)
+        .timeout(const Duration(seconds: 20));
+
     final list = List<Map<String, dynamic>>.from(
       data is Map ? (data['items'] ?? []) : (data ?? []),
     );

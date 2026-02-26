@@ -25,8 +25,8 @@ class _TopPicksTabState extends State<TopPicksTab> {
   String? _error;
   List<Map<String, dynamic>> _items = [];
 
-  // optional: dacă vrei filtru și aici
-  String _status = 'all'; // all/scheduled/live/finished
+  /// all/scheduled/live/finished
+  String _status = 'all';
 
   @override
   void initState() {
@@ -34,26 +34,38 @@ class _TopPicksTabState extends State<TopPicksTab> {
     _load(force: false);
   }
 
+  // --------------------------------------------------
+  // helpers
+  // --------------------------------------------------
+
   String _idFromLeague(Map<String, dynamic> l) {
     final v = l['id'] ?? l['league_id'] ?? l['leagueId'];
     return (v ?? '').toString();
   }
 
-  List<String> _allLeagueIds() {
-    final ids = <String>[];
+  List<String> _selectedLeagueIds() {
+    // 🔥 IMPORTANT: folosim DOAR ligile selectate
+    final ids = widget.leaguesStore.selectedIds.toList();
+    if (ids.isNotEmpty) return ids;
+
+    // fallback: toate ligile (dacă user nu a selectat)
+    final all = <String>[];
     for (final l in widget.leaguesStore.items) {
       final id = _idFromLeague(l);
-      if (id.isNotEmpty) ids.add(id);
+      if (id.isNotEmpty) all.add(id);
     }
-    return ids;
+    return all;
   }
 
   Future<void> _ensureLeaguesLoaded() async {
-    // dacă nu sunt încă încărcate, încearcă să le încarci
     if (widget.leaguesStore.items.isEmpty) {
       await widget.leaguesStore.load();
     }
   }
+
+  // --------------------------------------------------
+  // LOAD
+  // --------------------------------------------------
 
   Future<void> _load({required bool force}) async {
     setState(() {
@@ -64,7 +76,8 @@ class _TopPicksTabState extends State<TopPicksTab> {
     try {
       await _ensureLeaguesLoaded();
 
-      final leagueIds = _allLeagueIds();
+      final leagueIds = _selectedLeagueIds();
+
       if (leagueIds.isEmpty) {
         setState(() {
           _items = [];
@@ -78,8 +91,8 @@ class _TopPicksTabState extends State<TopPicksTab> {
         threshold: widget.settings.threshold,
         topPerLeague: widget.settings.topPerLeague,
         status: _status,
-        force: force,
         limit: 200,
+        force: force,
       );
 
       setState(() {
@@ -105,6 +118,10 @@ class _TopPicksTabState extends State<TopPicksTab> {
     return '${(d * 100).toStringAsFixed(0)}%';
   }
 
+  // --------------------------------------------------
+  // UI
+  // --------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -129,6 +146,7 @@ class _TopPicksTabState extends State<TopPicksTab> {
 
     return Column(
       children: [
+        // ---------------- STATUS FILTER ----------------
         Padding(
           padding: const EdgeInsets.all(12),
           child: DropdownButtonFormField<String>(
@@ -149,6 +167,8 @@ class _TopPicksTabState extends State<TopPicksTab> {
             },
           ),
         ),
+
+        // ---------------- LIST ----------------
         Expanded(
           child: RefreshIndicator(
             onRefresh: _refresh,
@@ -159,11 +179,12 @@ class _TopPicksTabState extends State<TopPicksTab> {
               itemBuilder: (context, i) {
                 final it = _items[i];
 
-                final league = _t(it['league_name'] ?? it['competition'] ?? it['league']);
+                final league =
+                    _t(it['league_name'] ?? it['competition'] ?? it['league']);
+
                 final home = _t(it['home']);
                 final away = _t(it['away']);
 
-                // probabilități (în backend-ul tău apar ca p_home/p_draw/p_away + p_gg/p_over25/p_under25)
                 final pHome = it['p_home'] ?? it['pHome'];
                 final pDraw = it['p_draw'] ?? it['pDraw'];
                 final pAway = it['p_away'] ?? it['pAway'];
@@ -181,7 +202,8 @@ class _TopPicksTabState extends State<TopPicksTab> {
                         if (league.isNotEmpty)
                           Text(
                             league,
-                            style: Theme.of(context).textTheme.titleMedium,
+                            style:
+                                Theme.of(context).textTheme.titleMedium,
                           ),
                         const SizedBox(height: 6),
                         Text(
@@ -191,17 +213,25 @@ class _TopPicksTabState extends State<TopPicksTab> {
                         const SizedBox(height: 10),
                         Row(
                           children: [
-                            Expanded(child: Text('Home: ${_fmtPct(pHome)}')),
-                            Expanded(child: Text('Draw: ${_fmtPct(pDraw)}')),
-                            Expanded(child: Text('Away: ${_fmtPct(pAway)}')),
+                            Expanded(
+                                child:
+                                    Text('Home: ${_fmtPct(pHome)}')),
+                            Expanded(
+                                child:
+                                    Text('Draw: ${_fmtPct(pDraw)}')),
+                            Expanded(
+                                child:
+                                    Text('Away: ${_fmtPct(pAway)}')),
                           ],
                         ),
                         const SizedBox(height: 8),
                         Row(
                           children: [
                             Expanded(child: Text('GG: ${_fmtPct(pGG)}')),
-                            Expanded(child: Text('O2.5: ${_fmtPct(pOver)}')),
-                            Expanded(child: Text('U2.5: ${_fmtPct(pUnder)}')),
+                            Expanded(
+                                child: Text('O2.5: ${_fmtPct(pOver)}')),
+                            Expanded(
+                                child: Text('U2.5: ${_fmtPct(pUnder)}')),
                           ],
                         ),
                       ],

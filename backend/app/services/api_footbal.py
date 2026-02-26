@@ -1,61 +1,107 @@
 import os
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
+# API-Football (api-sports) base URL
+API_FOOTBALL_BASE_URL = os.getenv("API_FOOTBALL_BASE_URL", "https://v3.football.api-sports.io")
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "").strip()
 
-API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
+DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "30"))
 
 
-def _headers() -> Dict[str, str]:
-    key = os.getenv("API_FOOTBALL_KEY") or os.getenv("RAPIDAPI_KEY")
-    host = os.getenv("API_FOOTBALL_HOST") or "v3.football.api-sports.io"
+class ApiFootballError(RuntimeError):
+    pass
 
-    if not key:
-        raise RuntimeError(
-            "Lipsește API_FOOTBALL_KEY (sau RAPIDAPI_KEY). "
-            "Setează-l în Render Environment."
+
+def _ensure_key():
+    if not API_FOOTBALL_KEY:
+        raise ApiFootballError(
+            "Missing API_FOOTBALL_KEY env var. Set it in Render -> Environment Variables."
         )
 
-    # API-Sports acceptă fie x-apisports-key, fie RapidAPI headers (depinde cum ai contul).
-    # Încercăm varianta API-Sports direct.
-    return {
-        "x-apisports-key": key,
-        "x-rapidapi-key": key,           # safe fallback
-        "x-rapidapi-host": host,         # safe fallback
-    }
+
+def _to_yyyy_mm_dd(d: Union[str, date, datetime, None]) -> Optional[str]:
+    if d is None:
+        return None
+    if isinstance(d, str):
+        s = d.strip()
+        return s if s else None
+    if isinstance(d, datetime):
+        return d.date().isoformat()
+    if isinstance(d, date):
+        return d.isoformat()
+    return None
+
+
+async def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    _ensure_key()
+    url = f"{API_FOOTBALL_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
+    headers = {"x-apisports-key": API_FOOTBALL_KEY}
+
+    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+        r = await client.get(url, headers=headers, params=params or {})
+        if r.status_code >= 400:
+            raise ApiFootballError(f"API-Football HTTP {r.status_code}: {r.text}")
+
+        data = r.json()
+        # API-Football structure: { get, parameters, errors, results, paging, response }
+        if isinstance(data, dict) and data.get("errors"):
+            raise ApiFootballError(f"API-Football errors: {data['errors']}")
+        return data
 
 
 async def fetch_fixtures_by_league(
-    *,
-    league: int,
-    season: int,
-    date_from: Optional[str] = None,  # "YYYY-MM-DD"
-    date_to: Optional[str] = None,    # "YYYY-MM-DD"
-    status: Optional[str] = None,     # ex: "NS", "FT"
-    next_n: Optional[int] = None,     # ex: 50
+    league_id: Union[str, int],
+    season: Union[str, int],
+    date_from: Union[str, date, datetime, None] = None,
+    date_to: Union[str, date, datetime, None] = None,
+    status: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
 ) -> List[Dict[str, Any]]:
     """
-    Returnează lista 'response' de la API-Football.
+    Returnează fixtures (meciuri) dintr-o ligă/sezon.
+    - league_id: id liga (ex: 39 EPL)
+    - season: ex: 2025
+    - date_from/date_to: YYYY-MM-DD (opțional)
+    - status: ex: NS, 1H, FT... (opțional)
+    - limit/offset: paginare simplă (noi aplicăm după ce primim lista)
     """
-    params: Dict[str, Any] = {"league": league, "season": season}
+    params: Dict[str, Any] = {
+        "league": int(league_id),
+        "season": int(season),
+    }
 
-    if date_from:
-        params["from"] = date_from
-    if date_to:
-        params["to"] = date_to
+    df = _to_yyyy_mm_dd(date_from)
+    dt = _to_yyyy_mm_dd(date_to)
+    if df:
+        params["from"] = df
+    if dt:
+        params["to"] = dt
     if status:
         params["status"] = status
-    if next_n:
-        params["next"] = next_n
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.get(
-            f"{API_FOOTBALL_BASE}/fixtures",
-            headers=_headers(),
-            params=params,
-        )
-        r.raise_for_status()
-        data = r.json()
+    data = await _get("/fixtures", params=params)
+    resp = data.get("response", [])
+    if not isinstance(resp, list):
+        return []
 
-    return data.get("response", [])
+    # Aplicăm limit/offset local (API-Football are și paging, dar așa e ok pt început)
+    start = max(0, int(offset))
+    end = start + max(1, int(limit))
+    return resp[start:end]
+
+
+async def fetch_leagues(season: Optional[Union[str, int]] = None) -> List[Dict[str, Any]]:
+    """
+    Listează ligi. Poți trimite sezonul ca să primești rezultate mai relevante.
+    """
+    params: Dict[str, Any] = {}
+    if season is not None:
+        params["season"] = int(season)
+
+    data = await _get("/leagues", params=params)
+    resp = data.get("response", [])
+    return resp if isinstance(resp, list) else []

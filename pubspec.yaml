@@ -8,6 +8,8 @@ environment:
   sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
+  http: ^1.2.2
+    intl: any 
   flutter:
     sdk: flutter
 

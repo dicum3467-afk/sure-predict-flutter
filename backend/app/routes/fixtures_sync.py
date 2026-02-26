@@ -1,4 +1,5 @@
 import os
+import httpx
 from datetime import date
 from typing import Optional
 

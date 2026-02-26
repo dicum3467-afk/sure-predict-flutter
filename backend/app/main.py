@@ -1,3 +1,6 @@
+import os
+from typing import Optional
+
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -6,14 +9,14 @@ from app.routes.fixtures import router as fixtures_router
 from app.routes.fixtures_by_league import router as fixtures_by_league_router
 from app.routes.fixtures_sync import router as fixtures_sync_router
 
-# init DB (creare tabele)
 from app.db_init import init_db
 
-# dacă ai și prediction router separat, îl includem (dacă nu există, nu crapă)
+# opțional (dacă există)
 try:
-    from app.routes.prediction import router as prediction_router
+    from app.routes.prediction import router as prediction_router  # type: ignore
 except Exception:
     prediction_router = None
+
 
 app = FastAPI(title="Sure Predict Backend")
 
@@ -30,10 +33,10 @@ app.include_router(leagues_router)
 app.include_router(fixtures_router)
 app.include_router(fixtures_by_league_router)
 
-# routes admin (sync din API-Football)
+# routes admin (sync)
 app.include_router(fixtures_sync_router)
 
-# opțional predictions
+# optional predictions
 if prediction_router:
     app.include_router(prediction_router)
 
@@ -43,15 +46,27 @@ def health():
     return {"status": "ok"}
 
 
-# IMPORTANT:
-# Endpoint temporar pentru a crea tabelele în Postgres.
-# Rulează o singură dată din Swagger: POST /admin/init-db
-# După ce a mers, recomand să-l ștergi sau să-l protejezi cu token.
-@app.post("/admin/init-db")
-def init_database(x_sync_token: str | None = Header(None, alias="X-Sync-Token")):
-    expected = __import__("os").getenv("SYNC_TOKEN")
+@app.on_event("startup")
+def on_startup():
+    """
+    Inițializează tabelele la pornire, doar dacă DATABASE_URL există.
+    (Pe Render, variabila e setată -> tabelele se creează automat la deploy.)
+    """
+    if os.getenv("DATABASE_URL"):
+        try:
+            init_db()
+        except Exception as e:
+            # nu crăpăm aplicația dacă DB e temporar indisponibilă
+            print(f"[startup] init_db failed: {e}")
 
-    # dacă ai setat SYNC_TOKEN în Render, îl cerem și aici (siguranță)
+
+@app.post("/admin/init-db")
+def init_database(x_sync_token: Optional[str] = Header(None, alias="X-Sync-Token")):
+    """
+    Endpoint manual (fallback) pentru a crea tabelele.
+    Protejat cu X-Sync-Token (SYNC_TOKEN din env).
+    """
+    expected = os.getenv("SYNC_TOKEN")
     if expected:
         if not x_sync_token or x_sync_token.strip() != expected.strip():
             raise HTTPException(status_code=401, detail="Invalid SYNC token")

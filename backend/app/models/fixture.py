@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, BigInteger, DateTime, JSON, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.db import Base
@@ -9,26 +9,28 @@ class Fixture(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # id-ul oficial din API-Football
+    # ID-ul meciului din API-Football
     fixture_id = Column(Integer, nullable=False, index=True)
 
-    league_id = Column(Integer, nullable=False, index=True)
-    season = Column(Integer, nullable=False, index=True)
+    league_id = Column(Integer, nullable=True, index=True)
+    season = Column(Integer, nullable=True, index=True)
 
-    # data utc (string ISO din API) o păstrăm ca string simplu (merge ok)
-    utc_date = Column(String, nullable=True)
+    # "2024-08-16T19:00:00+00:00" -> păstrăm ca string în raw, dar și datetime separat dacă vrei
+    date_utc = Column(DateTime(timezone=True), nullable=True)
 
-    # unix timestamp
-    timestamp = Column(BigInteger, nullable=True)
+    status_short = Column(String(10), nullable=True, index=True)  # NS/FT/1H/HT etc
 
-    # NS / FT / 1H / HT / 2H etc
-    status_short = Column(String, nullable=True, index=True)
+    home_team_id = Column(Integer, nullable=True, index=True)
+    away_team_id = Column(Integer, nullable=True, index=True)
 
-    home_team = Column(String, nullable=True)
-    away_team = Column(String, nullable=True)
+    home_team_name = Column(String(120), nullable=True)
+    away_team_name = Column(String(120), nullable=True)
 
-    # tot json-ul brut din API-Football
-    payload = Column(JSON, nullable=False)
+    home_goals = Column(Integer, nullable=True)
+    away_goals = Column(Integer, nullable=True)
+
+    # Păstrăm payload complet ca JSON (super util pentru debug / extra câmpuri)
+    raw = Column(JSON, nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

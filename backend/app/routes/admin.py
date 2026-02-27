@@ -18,4 +18,5 @@ def _check_token(x_sync_token: Optional[str]) -> None:
 @router.post("/db/init")
 def db_init(x_sync_token: Optional[str] = Header(None, alias="X-Sync-Token")):
     _check_token(x_sync_token)
-    return init_db()
+    init_db()
+    return {"status": "ok", "message": "db initialized"}

@@ -1,82 +1,67 @@
 from app.db import get_conn
 
 
-DDL = """
--- Pentru UUID-uri
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+def init_db():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # =========================
+            # LEAGUES
+            # =========================
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS leagues (
+                    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                    api_league_id INTEGER UNIQUE,
+                    name TEXT,
+                    country TEXT,
+                    logo TEXT
+                );
+            """)
 
--- Leagues (mapezi league API-Football -> UUID intern)
-CREATE TABLE IF NOT EXISTS leagues (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  api_league_id INT NOT NULL UNIQUE,
-  name TEXT,
-  country TEXT,
-  logo TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+            # =========================
+            # FIXTURES (create if missing)
+            # =========================
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS fixtures (
+                    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                    api_fixture_id INTEGER UNIQUE,
+                    league_id UUID REFERENCES leagues(id),
+                    home_team TEXT,
+                    away_team TEXT,
+                    fixture_date TIMESTAMP,
+                    status_short TEXT,
+                    goals_home INTEGER,
+                    goals_away INTEGER,
+                    raw_json JSONB
+                );
+            """)
 
--- Fixtures
-CREATE TABLE IF NOT EXISTS fixtures (
-  id BIGSERIAL PRIMARY KEY,
-  league_id UUID NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+            # =========================
+            # 🔥 MIGRATION FIX (IMPORTANT)
+            # adaugă coloane dacă lipsesc
+            # =========================
+            cur.execute("""
+                ALTER TABLE fixtures
+                ADD COLUMN IF NOT EXISTS fixture_date TIMESTAMP;
+            """)
 
-  season INT,
-  api_fixture_id INT NOT NULL UNIQUE,
+            cur.execute("""
+                ALTER TABLE fixtures
+                ADD COLUMN IF NOT EXISTS status_short TEXT;
+            """)
 
-  fixture_date TIMESTAMPTZ,
-  status TEXT,
-  status_short TEXT,
+            cur.execute("""
+                ALTER TABLE fixtures
+                ADD COLUMN IF NOT EXISTS goals_home INTEGER;
+            """)
 
-  home_team_id INT,
-  home_team TEXT,
-  away_team_id INT,
-  away_team TEXT,
+            cur.execute("""
+                ALTER TABLE fixtures
+                ADD COLUMN IF NOT EXISTS goals_away INTEGER;
+            """)
 
-  home_goals INT,
-  away_goals INT,
+            cur.execute("""
+                ALTER TABLE fixtures
+                ADD COLUMN IF NOT EXISTS raw_json JSONB;
+            """)
 
-  run_type TEXT NOT NULL DEFAULT 'manual',
-  raw JSONB,
-
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_fixtures_league_date ON fixtures(league_id, fixture_date);
-CREATE INDEX IF NOT EXISTS idx_fixtures_date ON fixtures(fixture_date);
-
--- Updated_at auto
-CREATE OR REPLACE FUNCTION set_updated_at()
-RETURNS trigger AS $$
-BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_fixtures_updated_at'
-  ) THEN
-    CREATE TRIGGER trg_fixtures_updated_at
-    BEFORE UPDATE ON fixtures
-    FOR EACH ROW
-    EXECUTE FUNCTION set_updated_at();
-  END IF;
-END $$;
-"""
-
-
-def init_db() -> dict:
-    """
-    Rulează DDL (idempotent) și returnează status.
-    """
-    conn = get_conn()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(DDL)
-        return {"ok": True, "message": "DB initialized (tables ensured)."}
-    finally:
-        conn.close()
+        conn.commit()

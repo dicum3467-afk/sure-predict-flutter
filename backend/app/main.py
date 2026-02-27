@@ -11,12 +11,11 @@ from app.routes.fixtures_sync import router as fixtures_sync_router
 
 from app.db_init import init_db
 
-# opțional (dacă există)
+# optional (dacă există fișierul)
 try:
-    from app.routes.prediction import router as prediction_router  # type: ignore
+    from app.routes.prediction import router as prediction_router
 except Exception:
     prediction_router = None
-
 
 app = FastAPI(title="Sure Predict Backend")
 
@@ -28,12 +27,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# routes publice
+# public routes
 app.include_router(leagues_router)
 app.include_router(fixtures_router)
 app.include_router(fixtures_by_league_router)
 
-# routes admin (sync)
+# admin routes (sync din API-Football)
 app.include_router(fixtures_sync_router)
 
 # optional predictions
@@ -46,26 +45,13 @@ def health():
     return {"status": "ok"}
 
 
-@app.on_event("startup")
-def on_startup():
-    """
-    Inițializează tabelele la pornire, doar dacă DATABASE_URL există.
-    (Pe Render, variabila e setată -> tabelele se creează automat la deploy.)
-    """
-    if os.getenv("DATABASE_URL"):
-        try:
-            init_db()
-        except Exception as e:
-            # nu crăpăm aplicația dacă DB e temporar indisponibilă
-            print(f"[startup] init_db failed: {e}")
-
-
+# IMPORTANT:
+# Endpoint temporar pentru a crea tabelele în Postgres.
+# Protejat cu token (SYNC_TOKEN) dacă îl setezi în Render.
 @app.post("/admin/init-db")
-def init_database(x_sync_token: Optional[str] = Header(None, alias="X-Sync-Token")):
-    """
-    Endpoint manual (fallback) pentru a crea tabelele.
-    Protejat cu X-Sync-Token (SYNC_TOKEN din env).
-    """
+def init_database(
+    x_sync_token: Optional[str] = Header(None, alias="X-Sync-Token"),
+):
     expected = os.getenv("SYNC_TOKEN")
     if expected:
         if not x_sync_token or x_sync_token.strip() != expected.strip():

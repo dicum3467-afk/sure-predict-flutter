@@ -1,6 +1,6 @@
 import os
 import psycopg2
-from psycopg2.rows import dict_row
+from psycopg2.extras import RealDictCursor
 
 
 def get_db_url() -> str:
@@ -12,10 +12,11 @@ def get_db_url() -> str:
 
 def get_conn():
     """
-    Returnează o conexiune psycopg (v3) la Postgres (Render).
+    Returnează o conexiune psycopg2 la Postgres (Render).
     """
     return psycopg2.connect(
         get_db_url(),
         connect_timeout=10,
-        row_factory=dict_row,  # rezultate ca dict
+        cursor_factory=RealDictCursor,
+        sslmode="require",
     )

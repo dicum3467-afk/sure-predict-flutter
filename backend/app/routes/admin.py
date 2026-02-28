@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 import os
 import requests
+from datetime import datetime, timedelta
 from app.db import get_conn
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -9,45 +10,68 @@ API_KEY = os.getenv("API_FOOTBALL_KEY")
 SYNC_TOKEN = os.getenv("SYNC_TOKEN")
 
 
-def check_token(token: str | None):
-    if not token or token != SYNC_TOKEN:
+def check_token(x_sync_token: str = Header(...)):
+    if x_sync_token != SYNC_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid sync token")
 
 
-# ✅ NEW — sync leagues
-@router.post("/sync/leagues")
-def sync_leagues(x_sync_token: str | None = Header(default=None)):
-    check_token(x_sync_token)
+@router.post("/sync/fixtures")
+def sync_fixtures(days_ahead: int = 7, _: str = Depends(check_token)):
+    conn = get_conn()
+    cur = conn.cursor()
 
-    url = "https://v3.football.api-sports.io/leagues"
+    date_from = datetime.utcnow().date()
+    date_to = date_from + timedelta(days=days_ahead)
+
+    url = "https://v3.football.api-sports.io/fixtures"
+
+    cur.execute("SELECT provider_league_id FROM leagues WHERE is_active = true")
+    leagues = cur.fetchall()
+
     headers = {"x-apisports-key": API_KEY}
-
-    resp = requests.get(url, headers=headers, timeout=60)
-    resp.raise_for_status()
-    data = resp.json().get("response", [])
 
     inserted = 0
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            for item in data:
-                league = item["league"]
+    for (league_id,) in leagues:
+        params = {
+            "league": league_id,
+            "from": str(date_from),
+            "to": str(date_to),
+        }
 
-                cur.execute(
-                    """
-                    INSERT INTO leagues (api_league_id, name, country, logo)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (api_league_id) DO NOTHING
-                    """,
-                    (
-                        league["id"],
-                        league["name"],
-                        item["country"]["name"],
-                        league["logo"],
-                    ),
+        r = requests.get(url, headers=headers, params=params)
+        data = r.json()
+
+        for item in data.get("response", []):
+            fixture = item["fixture"]
+            teams = item["teams"]
+
+            cur.execute(
+                """
+                INSERT INTO fixtures (
+                    provider_fixture_id,
+                    league_id,
+                    home_team,
+                    away_team,
+                    match_date,
+                    status
                 )
-                inserted += 1
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (provider_fixture_id) DO NOTHING
+                """,
+                (
+                    fixture["id"],
+                    league_id,
+                    teams["home"]["name"],
+                    teams["away"]["name"],
+                    fixture["date"],
+                    fixture["status"]["short"],
+                ),
+            )
+            inserted += 1
 
-        conn.commit()
+    conn.commit()
+    cur.close()
+    conn.close()
 
-    return {"status": "ok", "inserted": inserted}
+    return {"inserted": inserted}

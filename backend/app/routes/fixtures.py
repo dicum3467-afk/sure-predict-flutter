@@ -1,6 +1,14 @@
+from typing import Optional, List, Dict, Any
+from fastapi import APIRouter, HTTPException, Query
+from app.db import get_conn
+
+# ✅ IMPORTANT — router trebuie definit
+router = APIRouter(tags=["fixtures"])
+
+
 @router.get("/fixtures")
 def list_fixtures(
-    league_id: Optional[int] = Query(None),  # ⚠️ era string
+    league_id: Optional[int] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
@@ -22,7 +30,7 @@ def list_fixtures(
         with conn:
             with conn.cursor() as cur:
 
-                # ✅ CONVERSIE league_id -> UUID
+                # ✅ convert API league id -> UUID
                 if league_id is not None:
                     cur.execute(
                         "SELECT id FROM leagues WHERE api_league_id = %s LIMIT 1",

@@ -14,7 +14,7 @@ API_KEY = os.getenv("API_FOOTBALL_KEY") or os.getenv("API_FOOTBALL")
 
 def _require_api_key():
     if not API_KEY:
-        raise HTTPException(status_code=500, detail="Missing API_FOOTBALL_KEY env var")
+        raise HTTPException(status_code=500, detail="Missing API_FOOTBALL_KEY env var (API_FOOTBALL_KEY)")
 
 
 def _check_token(x_sync_token: Optional[str]):
@@ -28,16 +28,15 @@ def _api_get_with_retry(
     headers: Dict[str, str],
     params: Dict[str, Any],
     timeout: int = 30,
-    max_retries: int = 5,
+    max_retries: int = 6,
 ) -> requests.Response:
-    """
-    Safe GET with retries for transient errors, especially 429.
-    """
     backoff = 1.5
-    for attempt in range(max_retries):
-        resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+    last_resp: Optional[requests.Response] = None
 
-        # OK
+    for _ in range(max_retries):
+        resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+        last_resp = resp
+
         if resp.status_code == 200:
             return resp
 
@@ -51,28 +50,26 @@ def _api_get_with_retry(
                     sleep_s = backoff
             else:
                 sleep_s = backoff
-
             time.sleep(sleep_s)
             backoff = min(backoff * 2, 20)
             continue
 
-        # Server errors retry
+        # server errors retry
         if 500 <= resp.status_code <= 599:
             time.sleep(backoff)
             backoff = min(backoff * 2, 20)
             continue
 
-        # Other errors: stop
+        # other errors -> stop
         return resp
 
-    return resp  # last response
+    return last_resp if last_resp is not None else resp  # type: ignore
 
 
 def _parse_kickoff(dt_str: str) -> Optional[datetime]:
     if not dt_str:
         return None
     try:
-        # API-Football usually returns ISO string with Z
         return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
     except Exception:
         return None
@@ -87,11 +84,7 @@ def _fetch_all_fixtures_for_league(
     max_pages: int = 10,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
-    Fetch ALL fixtures for a league in a date range, following pagination:
-    response has:
-      - response: [...]
-      - paging: { current, total }
-    Returns (items, pages_fetched)
+    Returneaza (items, pages_fetched) cu paginare.
     """
     url = "https://v3.football.api-sports.io/fixtures"
     all_items: List[Dict[str, Any]] = []
@@ -107,12 +100,12 @@ def _fetch_all_fixtures_for_league(
             "page": page,
         }
 
-        resp = _api_get_with_retry(url, headers=headers, params=params, timeout=30, max_retries=5)
+        resp = _api_get_with_retry(url, headers=headers, params=params, timeout=30, max_retries=6)
         if resp.status_code != 200:
             raise HTTPException(
                 status_code=500,
-                detail=f"API error league={provider_league_id} page={page} "
-                       f"status={resp.status_code} body={resp.text[:300]}",
+                detail=f"API error league={provider_league_id} season={season} page={page} "
+                       f"status={resp.status_code} body={resp.text[:250]}",
             )
 
         data = resp.json() or {}
@@ -120,20 +113,56 @@ def _fetch_all_fixtures_for_league(
         all_items.extend(items)
 
         paging = data.get("paging", {}) or {}
-        current = paging.get("current", page)
-        total = paging.get("total", page)
+        current = int(paging.get("current", page) or page)
+        total = int(paging.get("total", page) or page)
 
         pages_fetched += 1
 
-        # stop conditions
         if current >= total:
             break
+
         page += 1
         if page > max_pages:
-            # safety cap; you can raise max_pages if needed
             break
 
     return all_items, pages_fetched
+
+
+def _choose_best_season_for_league(
+    provider_league_id: int,
+    candidate_seasons: List[int],
+    date_from: str,
+    date_to: str,
+    headers: Dict[str, str],
+    max_pages: int,
+) -> Tuple[int, List[Dict[str, Any]], int]:
+    """
+    Incearca mai multe sezoane si alege sezonul cu cele mai multe items.
+    Return: (best_season, best_items, pages_fetched_for_best)
+    """
+    best_season = candidate_seasons[0]
+    best_items: List[Dict[str, Any]] = []
+    best_pages = 0
+
+    for s in candidate_seasons:
+        items, pages = _fetch_all_fixtures_for_league(
+            provider_league_id=provider_league_id,
+            season=s,
+            date_from=date_from,
+            date_to=date_to,
+            headers=headers,
+            max_pages=max_pages,
+        )
+        if len(items) > len(best_items):
+            best_items = items
+            best_season = s
+            best_pages = pages
+
+        # mic shortcut: daca am gasit destule, nu mai incercam (optional)
+        if len(best_items) >= 50:
+            break
+
+    return best_season, best_items, best_pages
 
 
 @router.post("/fixtures/admin-sync")
@@ -141,15 +170,16 @@ def admin_sync_fixtures(
     days_ahead: int = Query(14, ge=1, le=14),
     past_days: int = Query(2, ge=0, le=14),
     season: Optional[int] = Query(None),
-    max_pages: int = Query(10, ge=1, le=50),  # ✅ PRO: cap pt paginare
+    max_pages: int = Query(10, ge=1, le=50),
+    season_lookback: int = Query(2, ge=0, le=5),  # PRO++: cate sezoane in spate incercam
     x_sync_token: str | None = Header(default=None, alias="X-Sync-Token"),
 ):
     """
-    PRO Sync fixtures din API-Football in tabela fixtures, cu paginare + retry.
-
-    - viitoare: days_ahead (max 14)
-    - trecute: past_days (max 14)
-    - max_pages: limita de siguranta pentru paginare per liga (default 10)
+    PRO++ Sync fixtures cu:
+      - past_days + days_ahead
+      - paginare
+      - retry la 429/5xx
+      - auto-detect sezon per liga (daca season nu e trimis)
     """
 
     _check_token(x_sync_token)
@@ -159,38 +189,62 @@ def admin_sync_fixtures(
     date_from = today - timedelta(days=past_days)
     date_to = today + timedelta(days=days_ahead)
 
-    used_season = season if season is not None else date_to.year
+    headers = {
+        "x-apisports-key": API_KEY,
+        "accept": "application/json",
+    }
 
     upserted = 0
     skipped = 0
     total_pages = 0
     total_items_fetched = 0
 
-    headers = {
-        "x-apisports-key": API_KEY,
-        "accept": "application/json",
-    }
+    league_season_choices: List[Dict[str, Any]] = []
 
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                # ligile active
                 cur.execute("""
-                    SELECT id, provider_league_id
+                    SELECT id, provider_league_id, name
                     FROM leagues
                     WHERE is_active = true
                 """)
                 leagues = cur.fetchall()
 
-                for league_uuid, provider_league_id in leagues:
-                    items, pages_fetched = _fetch_all_fixtures_for_league(
-                        provider_league_id=int(provider_league_id),
-                        season=int(used_season),
-                        date_from=str(date_from),
-                        date_to=str(date_to),
-                        headers=headers,
-                        max_pages=max_pages,
-                    )
+                for league_uuid, provider_league_id, league_name in leagues:
+                    provider_league_id_int = int(provider_league_id)
+
+                    if season is not None:
+                        used_season = int(season)
+                        items, pages_fetched = _fetch_all_fixtures_for_league(
+                            provider_league_id=provider_league_id_int,
+                            season=used_season,
+                            date_from=str(date_from),
+                            date_to=str(date_to),
+                            headers=headers,
+                            max_pages=max_pages,
+                        )
+                    else:
+                        # PRO++: candidate seasons
+                        # folosim anul de la date_to ca "curent" + inapoi season_lookback
+                        base = int(date_to.year)
+                        candidate_seasons = [base - i for i in range(0, season_lookback + 1)]
+                        used_season, items, pages_fetched = _choose_best_season_for_league(
+                            provider_league_id=provider_league_id_int,
+                            candidate_seasons=candidate_seasons,
+                            date_from=str(date_from),
+                            date_to=str(date_to),
+                            headers=headers,
+                            max_pages=max_pages,
+                        )
+
+                    league_season_choices.append({
+                        "league": league_name,
+                        "provider_league_id": provider_league_id_int,
+                        "season_used": used_season,
+                        "items": len(items),
+                        "pages": pages_fetched,
+                    })
 
                     total_pages += pages_fetched
                     total_items_fetched += len(items)
@@ -219,7 +273,7 @@ def admin_sync_fixtures(
 
                         status = status_info.get("short") or status_info.get("long") or "UNKNOWN"
 
-                        # Upsert pe provider_fixture_id (ai unique index deja)
+                        # Upsert pe provider_fixture_id
                         cur.execute(
                             """
                             INSERT INTO fixtures (
@@ -265,17 +319,22 @@ def admin_sync_fixtures(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
 
+    # sortam ca sa vezi rapid ligile cu 0 items
+    league_season_choices.sort(key=lambda x: x["items"], reverse=True)
+
     return {
         "ok": True,
-        "leagues": len(leagues) if "leagues" in locals() else 0,
         "from": str(date_from),
         "to": str(date_to),
-        "season": used_season,
         "past_days": past_days,
         "days_ahead": days_ahead,
+        "season_param": season,
+        "season_lookback": season_lookback,
         "max_pages": max_pages,
+        "leagues_active": len(leagues) if "leagues" in locals() else 0,
         "pages_fetched_total": total_pages,
         "items_fetched_total": total_items_fetched,
         "upserted": upserted,
         "skipped": skipped,
-                    }
+        "league_season_choices": league_season_choices,
+                        }

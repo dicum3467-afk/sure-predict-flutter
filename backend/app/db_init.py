@@ -1,20 +1,35 @@
 # backend/app/db_init.py
+# Inițializează / migrează schema Postgres pentru Sure Predict
+#
+# Folosește app.db.get_conn() (psycopg v3). Codul suportă row_factory=dict_row sau tuple.
+#
+# ATENȚIE:
+# - Dacă ai avut un fixtures.league_id vechi ca INTEGER (nu UUID), nu se poate converti direct.
+#   În acest caz, scriptul va recrea tabela fixtures (drop + create) ca să fie compatibilă.
+#   Dacă vrei să eviți drop, setează FORCE_RECREATE_FIXTURES=0 și vei primi eroare cu mesaj clar.
 
 from __future__ import annotations
+
+import os
+import time
+from typing import Optional, Tuple, Any
 
 from app.db import get_conn
 
 
-def _col_type(cur, table: str, column: str):
-    cur.execute(
-        """
-        SELECT data_type, udt_name
-        FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = %s AND column_name = %s
-        """,
-        (table, column),
-    )
-    return cur.fetchone()  # (data_type, udt_name) or None
+# --------------------------
+# helpers (dict_row safe)
+# --------------------------
+
+def _scalar(row: Any, key: str | None = None, idx: int = 0):
+    """Returnează o valoare din row (dict sau tuple)."""
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        if key is not None:
+            return row.get(key)
+        return next(iter(row.values()), None)
+    return row[idx]
 
 
 def _table_exists(cur, table: str) -> bool:
@@ -23,37 +38,93 @@ def _table_exists(cur, table: str) -> bool:
         SELECT EXISTS(
           SELECT 1 FROM information_schema.tables
           WHERE table_schema='public' AND table_name=%s
-        )
+        ) AS exists
         """,
         (table,),
     )
-    return bool(cur.fetchone()[0])
+    return bool(_scalar(cur.fetchone(), key="exists"))
 
 
-def _ensure_extensions(cur):
-    # gen_random_uuid()
+def _column_exists(cur, table: str, column: str) -> bool:
+    cur.execute(
+        """
+        SELECT EXISTS(
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name=%s AND column_name=%s
+        ) AS exists
+        """,
+        (table, column),
+    )
+    return bool(_scalar(cur.fetchone(), key="exists"))
+
+
+def _col_type(cur, table: str, column: str) -> Optional[Tuple[str, str]]:
+    """
+    Returnează (data_type, udt_name) sau None dacă nu există.
+    Exemple:
+      - UUID: ("uuid", "uuid")
+      - integer: ("integer", "int4")
+      - text: ("text", "text")
+      - timestamptz: ("timestamp with time zone", "timestamptz")
+    """
+    cur.execute(
+        """
+        SELECT data_type, udt_name
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=%s AND column_name=%s
+        """,
+        (table, column),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return (row.get("data_type"), row.get("udt_name"))
+    return row  # tuple
+
+
+def _add_column_if_missing(cur, table: str, col: str, ddl_type: str):
+    if not _column_exists(cur, table, col):
+        cur.execute(f'ALTER TABLE "{table}" ADD COLUMN "{col}" {ddl_type};')
+
+
+def _drop_constraint_if_exists(cur, table: str, constraint_name: str):
+    cur.execute(
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conname = %s
+          ) THEN
+            EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', %s, %s);
+          END IF;
+        END $$;
+        """,
+        (constraint_name, table, constraint_name),
+    )
+
+
+def _ensure_pgcrypto(cur):
+    # gen_random_uuid() este în extensia pgcrypto
     cur.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto";')
 
+
+# --------------------------
+# schema create
+# --------------------------
 
 def _create_leagues(cur):
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS leagues (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          api_league_id INTEGER UNIQUE NOT NULL,
+          id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+          api_league_id INTEGER UNIQUE,
           name TEXT,
           country TEXT,
-          logo TEXT,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          logo TEXT
         );
-        """
-    )
-
-    cur.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_leagues_api_league_id
-        ON leagues(api_league_id);
         """
     )
 
@@ -62,12 +133,12 @@ def _create_fixtures(cur):
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS fixtures (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-
-          api_fixture_id INTEGER UNIQUE NOT NULL,
+          id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
 
           league_id UUID REFERENCES leagues(id) ON DELETE SET NULL,
           season INTEGER,
+
+          api_fixture_id BIGINT UNIQUE,
 
           fixture_date TIMESTAMPTZ,
           status TEXT,
@@ -82,151 +153,120 @@ def _create_fixtures(cur):
           away_goals INTEGER,
 
           run_type TEXT,
-
-          raw JSONB,
-
-          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          raw JSONB
         );
         """
     )
 
-    cur.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_fixtures_league_season_date
-        ON fixtures(league_id, season, fixture_date);
-        """
-    )
-    cur.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_fixtures_api_fixture_id
-        ON fixtures(api_fixture_id);
-        """
-    )
+
+def _ensure_indexes(cur):
+    # utile pentru query-uri
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_fixtures_league_season ON fixtures(league_id, season);')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_fixtures_date ON fixtures(fixture_date);')
 
 
-def _add_column_if_missing(cur, table: str, col: str, ddl_type: str):
-    cur.execute(
-        """
-        SELECT EXISTS(
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name=%s AND column_name=%s
-        )
-        """,
-        (table, col),
-    )
-    exists = bool(cur.fetchone()[0])
-    if not exists:
-        cur.execute(f'ALTER TABLE "{table}" ADD COLUMN "{col}" {ddl_type};')
+# --------------------------
+# migrations / compatibility
+# --------------------------
+
+def _fixtures_needs_recreate(cur) -> bool:
+    """
+    Returnează True dacă fixtures există dar are tipuri incompatibile (ex: league_id int).
+    """
+    if not _table_exists(cur, "fixtures"):
+        return False
+
+    # league_id trebuie să fie uuid
+    t = _col_type(cur, "fixtures", "league_id")
+    if t is not None:
+        data_type, udt = t
+        # pentru uuid: data_type poate fi 'uuid' sau udt_name 'uuid'
+        if (udt or "").lower() != "uuid":
+            return True
+
+    # api_fixture_id trebuie să existe (altfel aveai eroarea UndefinedColumn)
+    if not _column_exists(cur, "fixtures", "api_fixture_id"):
+        return True
+
+    return False
 
 
-def _ensure_fixtures_columns(cur):
-    # adaugă coloane lipsă (migrare “safe”)
-    _add_column_if_missing(cur, "fixtures", "api_fixture_id", "INTEGER")
-    _add_column_if_missing(cur, "fixtures", "league_id", "UUID")
+def _recreate_fixtures(cur):
+    # Drop and recreate fixtures table
+    # (în proiectul tău e early-stage; dacă ai date importante, fă backup înainte)
+    cur.execute("DROP TABLE IF EXISTS fixtures CASCADE;")
+    _create_fixtures(cur)
+    _ensure_indexes(cur)
+
+
+def _migrate_fixtures_in_place(cur):
+    """
+    Migrare safe (add columns) fără recreate.
+    Atenție: nu poate converti league_id int -> uuid.
+    """
+    # adaugă coloanele noi, dacă lipsesc
     _add_column_if_missing(cur, "fixtures", "season", "INTEGER")
+    _add_column_if_missing(cur, "fixtures", "api_fixture_id", "BIGINT")
     _add_column_if_missing(cur, "fixtures", "fixture_date", "TIMESTAMPTZ")
     _add_column_if_missing(cur, "fixtures", "status", "TEXT")
     _add_column_if_missing(cur, "fixtures", "status_short", "TEXT")
+
     _add_column_if_missing(cur, "fixtures", "home_team_id", "INTEGER")
     _add_column_if_missing(cur, "fixtures", "home_team", "TEXT")
     _add_column_if_missing(cur, "fixtures", "away_team_id", "INTEGER")
     _add_column_if_missing(cur, "fixtures", "away_team", "TEXT")
+
     _add_column_if_missing(cur, "fixtures", "home_goals", "INTEGER")
     _add_column_if_missing(cur, "fixtures", "away_goals", "INTEGER")
+
     _add_column_if_missing(cur, "fixtures", "run_type", "TEXT")
     _add_column_if_missing(cur, "fixtures", "raw", "JSONB")
-    _add_column_if_missing(cur, "fixtures", "created_at", "TIMESTAMPTZ NOT NULL DEFAULT now()")
-    _add_column_if_missing(cur, "fixtures", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT now()")
 
-    # unique constraint pe api_fixture_id (dacă nu există)
-    cur.execute(
-        """
-        DO $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM pg_constraint
-            WHERE conname = 'fixtures_api_fixture_id_key'
-          ) THEN
-            BEGIN
-              ALTER TABLE fixtures
-              ADD CONSTRAINT fixtures_api_fixture_id_key UNIQUE (api_fixture_id);
-            EXCEPTION WHEN duplicate_table OR duplicate_object THEN
-              -- ignore
-            END;
-          END IF;
-        END$$;
-        """
-    )
+    # asigură UNIQUE pe api_fixture_id (dacă lipsește)
+    # (nu știm numele exact al constraint-ului vechi, deci folosim CREATE UNIQUE INDEX)
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_fixtures_api_fixture_id ON fixtures(api_fixture_id);")
 
-    # FK league_id -> leagues(id) (dacă nu există)
-    cur.execute(
-        """
-        DO $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM pg_constraint
-            WHERE conname = 'fixtures_league_id_fkey'
-          ) THEN
-            BEGIN
-              ALTER TABLE fixtures
-              ADD CONSTRAINT fixtures_league_id_fkey
-              FOREIGN KEY (league_id) REFERENCES leagues(id) ON DELETE SET NULL;
-            EXCEPTION WHEN duplicate_table OR duplicate_object THEN
-              -- ignore
-            END;
-          END IF;
-        END$$;
-        """
-    )
+    _ensure_indexes(cur)
 
 
-def _schema_compatible_or_recreate(cur):
-    """
-    Dacă ai deja fixtures vechi cu tipuri incompatibile (de ex league_id INTEGER),
-    e aproape imposibil de “ALTER TYPE” corect fără pierdere/complicații.
-    Cel mai safe: DROP fixtures și recreezi (datele vin din sync).
-    """
-    if not _table_exists(cur, "fixtures"):
-        return
-
-    # league_id trebuie să fie uuid (udt_name = uuid)
-    league_id = _col_type(cur, "fixtures", "league_id")
-    if league_id is not None:
-        data_type, udt_name = league_id
-        if udt_name != "uuid":
-            # drop & recreate fixtures (nu atinge leagues)
-            cur.execute("DROP TABLE IF EXISTS fixtures CASCADE;")
-            _create_fixtures(cur)
-            return
-
-    # api_fixture_id trebuie să existe
-    api_fix = _col_type(cur, "fixtures", "api_fixture_id")
-    if api_fix is None:
-        # dacă e veche schema, mai simplu drop & recreate
-        cur.execute("DROP TABLE IF EXISTS fixtures CASCADE;")
-        _create_fixtures(cur)
-        return
-
+# --------------------------
+# public entry point
+# --------------------------
 
 def init_db() -> dict:
     """
-    Rulează la /admin/db/init
+    Creează schema + face migrarea astfel încât sync/fixtures să funcționeze.
+    Returnează dict pentru endpoint /admin/db/init.
     """
+    force_recreate = os.getenv("FORCE_RECREATE_FIXTURES", "1").strip() not in ("0", "false", "False")
+
     with get_conn() as conn:
         with conn.cursor() as cur:
-            _ensure_extensions(cur)
+            _ensure_pgcrypto(cur)
 
-            # tabele core
+            # base tables
             _create_leagues(cur)
-            _create_fixtures(cur)
 
-            # dacă fixtures e incompatibil -> recreează
-            _schema_compatible_or_recreate(cur)
+            if not _table_exists(cur, "fixtures"):
+                _create_fixtures(cur)
+                _ensure_indexes(cur)
+                conn.commit()
+                return {"status": "ok", "message": "db initialized (fresh schema)"}
 
-            # migrare coloane lipsă + constraints
-            _ensure_fixtures_columns(cur)
+            # fixtures exists -> ensure compatible
+            if _fixtures_needs_recreate(cur):
+                if not force_recreate:
+                    t = _col_type(cur, "fixtures", "league_id")
+                    raise RuntimeError(
+                        "Schema incompatibilă la fixtures (ex: league_id nu e UUID / api_fixture_id lipsește). "
+                        "Setează FORCE_RECREATE_FIXTURES=1 (default) ca să recreeze tabela fixtures."
+                        f" league_id type={t}"
+                    )
+                _recreate_fixtures(cur)
+                conn.commit()
+                return {"status": "ok", "message": "db initialized (fixtures recreated for compatibility)"}
 
-        conn.commit()
-
-    return {"status": "ok", "message": "db initialized"}
+            # altfel: migrate in place (add missing columns/indexes)
+            _migrate_fixtures_in_place(cur)
+            conn.commit()
+            return {"status": "ok", "message": "db initialized (migrated in place)"}

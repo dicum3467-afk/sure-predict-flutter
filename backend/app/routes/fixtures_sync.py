@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List, Tuple
 import requests
 from fastapi import APIRouter, HTTPException, Query, Header
 
-from app.db import get_conn  # IMPORTANT: get_conn e context manager
+from app.db import get_conn  # IMPORTANT: get_conn() e context manager
 
 router = APIRouter(tags=["fixtures"])
 
@@ -30,32 +30,26 @@ def _check_token(x_sync_token: Optional[str]) -> None:
 
 def _daterange_utc(past_days: int, days_ahead: int) -> Tuple[date, date]:
     """
-    Returnează (from_date, to_date_inclusive) ca date UTC.
+    Returneaza (from_date, to_date_inclusive) ca date UTC.
     """
     today = datetime.now(timezone.utc).date()
     frm = today - timedelta(days=past_days)
-    to = today + timedelta(days=days_ahead)
-    return frm, to
+    to_inclusive = today + timedelta(days=days_ahead)
+    return frm, to_inclusive
 
 
 def _to_dt_range_utc(frm: date, to_inclusive: date) -> Tuple[datetime, datetime]:
     """
-    Convertim date -> datetime UTC [from, to_exclusive)
+    Convertim date -> datetime UTC:
+    - from_dt = 00:00:00
+    - to_dt_exclusive = ziua urmatoare la 00:00:00 (pentru interval [from, to))
     """
     frm_dt = datetime(frm.year, frm.month, frm.day, tzinfo=timezone.utc)
-    to_excl = datetime(to_inclusive.year, to_inclusive.month, to_inclusive.day, tzinfo=timezone.utc) + timedelta(
-        days=1
-    )
-    return frm_dt, to_excl
+    to_dt_excl = datetime(to_inclusive.year, to_inclusive.month, to_inclusive.day, tzinfo=timezone.utc) + timedelta(days=1)
+    return frm_dt, to_dt_excl
 
 
-def _api_get_fixtures(
-    provider_league_id: int,
-    season: int,
-    frm: date,
-    to: date,
-    page: int,
-) -> Dict[str, Any]:
+def _api_get_fixtures(league_id: int, season: int, frm: date, to_inclusive: date, page: int) -> Dict[str, Any]:
     """
     API-Football v3 Fixtures endpoint (cu paginare).
     """
@@ -65,10 +59,10 @@ def _api_get_fixtures(
         "accept": "application/json",
     }
     params = {
-        "league": provider_league_id,
+        "league": league_id,
         "season": season,
         "from": frm.isoformat(),
-        "to": to.isoformat(),
+        "to": to_inclusive.isoformat(),
         "page": page,
     }
 
@@ -80,19 +74,18 @@ def _api_get_fixtures(
     if resp.status_code != 200:
         raise HTTPException(
             status_code=502,
-            detail=f"API-Football error (status={resp.status_code}) league={provider_league_id} season={season} page={page}",
+            detail=f"API-Football error status={resp.status_code} league={league_id} season={season} page={page}",
         )
     return resp.json()
 
 
 def _parse_iso_dt(s: Optional[str]) -> Optional[datetime]:
     """
-    Primește ISO (de obicei cu 'Z') și întoarce datetime UTC.
+    Primeste ISO (de obicei cu 'Z' sau '+00:00') si intoarce datetime UTC.
     """
     if not s:
         return None
     try:
-        # API-Football: "2026-02-20T10:46:59+00:00" sau "...Z"
         s2 = s.replace("Z", "+00:00")
         dt = datetime.fromisoformat(s2)
         if dt.tzinfo is None:
@@ -104,42 +97,40 @@ def _parse_iso_dt(s: Optional[str]) -> Optional[datetime]:
 
 def _parse_fixture_row(item: Dict[str, Any], league_uuid: str) -> Optional[Dict[str, Any]]:
     """
-    Normalizează un item API-Football în formatul nostru pentru DB.
+    Normalizeaza un item API-Football in formatul nostru pentru DB.
+    IMPORTANT: kickoff_at il pastram ISO string (Postgres stie sa parseze la timestamptz).
     """
     fx = item.get("fixture") or {}
     teams = item.get("teams") or {}
     goals = item.get("goals") or {}
-    league = item.get("league") or {}
+    lg = item.get("league") or {}
 
     provider_fixture_id = fx.get("id")
-    kickoff_at = fx.get("date")  # ISO UTC
+    kickoff_at = fx.get("date")  # ISO string UTC (+00:00)
     if not provider_fixture_id or not kickoff_at:
         return None
 
     status_short = ((fx.get("status") or {}).get("short")) or None
 
-    home = (teams.get("home") or {}).get("name")
-    away = (teams.get("away") or {}).get("name")
+    home = ((teams.get("home") or {}).get("name")) or None
+    away = ((teams.get("away") or {}).get("name")) or None
 
     home_goals = goals.get("home")
     away_goals = goals.get("away")
 
-    # round poate veni ca string gen "Regular Season - 26"
-    round_name = league.get("round")
-
-    # run_type (optional) - util pt debug / tracking
+    round_name = lg.get("round")
     run_type = "sync"
 
     return {
         "league_id": league_uuid,
         "provider_fixture_id": str(provider_fixture_id),
-        "kickoff_at": kickoff_at,  # string ISO -> lăsăm DB să parseze timestamptz
-        "status": status_short,  # păstrăm short (NS/FT/HT etc). Poți normaliza ulterior dacă vrei.
+        "kickoff_at": kickoff_at,
+        "status": status_short,
         "home_team": home,
         "away_team": away,
         "home_goals": home_goals,
         "away_goals": away_goals,
-        "season": league.get("season"),
+        "season": lg.get("season"),
         "round": round_name,
         "run_type": run_type,
     }
@@ -147,23 +138,20 @@ def _parse_fixture_row(item: Dict[str, Any], league_uuid: str) -> Optional[Dict[
 
 @router.post("/fixtures/admin-sync")
 def admin_sync_fixtures(
-    # PRO++ range mare, dar controlat
     days_ahead: int = Query(14, ge=1, le=90, description="Câte zile în viitor să sincronizeze (max 90)."),
     past_days: int = Query(7, ge=0, le=90, description="Câte zile în trecut să includă (max 90)."),
-    # sezon explicit sau auto-detect
     season: Optional[int] = Query(None, description="Sezonul (ex: 2025). Dacă lipsește, se auto-detectează."),
-    # paginare
     max_pages: int = Query(10, ge=1, le=50, description="Limită pagini per ligă (max 50)."),
     season_lookback: int = Query(2, ge=0, le=5, description="Câți ani înapoi să caute sezonul dacă nu e dat."),
     x_sync_token: Optional[str] = Header(default=None, alias="X-Sync-Token"),
 ) -> Dict[str, Any]:
     """
-    PRO++ Sync fixtures din API-Football în tabela fixtures, pentru ligile active din tabela leagues.
+    Sync fixtures din API-Football în tabela fixtures, pentru ligile active din tabela leagues.
     Include:
-      - viitor (days_ahead)
-      - trecut (past_days)
-      - paginare (max_pages)
-      - auto-detect sezon (dacă season nu e trimis)
+    - viitor (days_ahead)
+    - trecut (past_days)
+    - paginare (max_pages)
+    - auto-detect sezon (dacă season nu e trimis)
     """
     _check_token(x_sync_token)
     _require_api_key()
@@ -175,11 +163,9 @@ def admin_sync_fixtures(
     updated = 0
     skipped = 0
 
-    # ce sezoane încercăm dacă nu e explicit:
     now_year = datetime.now(timezone.utc).year
     seasons_to_try: List[int] = [season] if season is not None else [now_year - i for i in range(0, season_lookback + 1)]
 
-    # UPSERT (ai index UNIQUE pe provider_fixture_id)
     upsert_sql = """
         INSERT INTO fixtures (
             league_id,
@@ -194,7 +180,7 @@ def admin_sync_fixtures(
             round,
             run_type
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (provider_fixture_id)
         DO UPDATE SET
             league_id   = EXCLUDED.league_id,
@@ -210,11 +196,11 @@ def admin_sync_fixtures(
         RETURNING (xmax = 0) AS inserted;
     """
 
-    # ✅ FIX IMPORTANT: get_conn() e context manager
     try:
+        # IMPORTANT: aici luam CONEXIUNEA reala, nu context manager-ul
         with get_conn() as conn:
             with conn.cursor() as cur:
-                # ligile active
+                # Ligile active
                 cur.execute(
                     """
                     SELECT id, provider_league_id
@@ -223,10 +209,10 @@ def admin_sync_fixtures(
                     ORDER BY provider_league_id ASC
                     """
                 )
-                leagues: List[Tuple[str, Any]] = cur.fetchall()
+                leagues = cur.fetchall()  # [(uuid, provider_league_id), ...]
 
                 for league_uuid, provider_league_id in leagues:
-                    # provider_league_id poate fi TEXT în DB → îl convertim sigur la int
+                    # provider_league_id poate fi TEXT în DB -> convertim sigur
                     try:
                         provider_league_int = int(provider_league_id)
                     except Exception:
@@ -235,7 +221,7 @@ def admin_sync_fixtures(
 
                     chosen_season: Optional[int] = None
 
-                    # auto-detect sezon: încercăm pagina 1, dacă are response -> sezon bun
+                    # auto-detect sezon: probe page=1 până găsim răspuns cu items
                     for s in seasons_to_try:
                         data_probe = _api_get_fixtures(provider_league_int, s, frm, to_inclusive, page=1)
                         items_probe = data_probe.get("response") or []
@@ -246,11 +232,12 @@ def admin_sync_fixtures(
                     if chosen_season is None:
                         continue
 
-                    # sincronizăm paginile (max_pages)
+                    # sync pagini
                     page = 1
                     while True:
                         data = _api_get_fixtures(provider_league_int, chosen_season, frm, to_inclusive, page=page)
                         items = data.get("response") or []
+
                         paging = data.get("paging") or {}
                         total_pages = int(paging.get("total") or 1)
 
@@ -268,7 +255,7 @@ def admin_sync_fixtures(
                                 skipped += 1
                                 continue
 
-                            # filtrare extra sigură în interval (API deja filtrează, dar ținem și noi)
+                            # filtrare extra sigură în interval [frm_dt, to_dt_excl)
                             if not (frm_dt <= k_dt < to_dt_excl):
                                 continue
 
@@ -294,28 +281,26 @@ def admin_sync_fixtures(
                             else:
                                 updated += 1
 
-                        conn.commit()
-
                         if page >= total_pages:
                             break
                         if page >= max_pages:
                             break
                         page += 1
 
+        return {
+            "ok": True,
+            "leagues": len(leagues),
+            "inserted": inserted,
+            "updated": updated,
+            "skipped": skipped,
+            "from": frm.isoformat(),
+            "to": to_inclusive.isoformat(),
+            "season": season if season is not None else seasons_to_try[0],
+            "seasons_tried": seasons_to_try,
+            "max_pages": max_pages,
+        }
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
-
-    return {
-        "ok": True,
-        "leagues": len(leagues) if "leagues" in locals() else 0,
-        "inserted": inserted,
-        "updated": updated,
-        "skipped": skipped,
-        "from": frm.isoformat(),
-        "to": to_inclusive.isoformat(),
-        "season": season if season is not None else seasons_to_try[0],
-        "seasons_tried": seasons_to_try,
-        "max_pages": max_pages,
-    }

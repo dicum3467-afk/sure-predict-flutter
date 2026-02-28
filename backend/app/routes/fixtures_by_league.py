@@ -58,7 +58,7 @@ def list_fixtures_by_league(
         where.append("l.provider_league_id = %s")
         params.append(provider_league_id)
     elif league_id:
-        where.append("f.league_id = %s")
+        where.append("f.league_id::int = %s")
         params.append(league_id)
 
     # ✅ implicit doar meciuri viitoare

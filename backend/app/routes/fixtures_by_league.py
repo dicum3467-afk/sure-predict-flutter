@@ -54,11 +54,11 @@ def list_fixtures_by_league(
     params: List[Any] = []
 
     # ✅ filtrare liga
-    if provider_league_id:
-        where.append("l.provider_league_id = %s")
+    if provider_league_id is not None:
+        where.append("l.provider_league_id::int = %s")
         params.append(provider_league_id)
     elif league_id:
-        where.append("f.league_id::int = %s")
+        where.append("f.league_id = %s")
         params.append(league_id)
 
     # ✅ implicit doar meciuri viitoare

@@ -84,7 +84,7 @@ def fixtures_by_league(
 
 @router.post("/admin-sync")
 def admin_sync_fixtures(
-    days_ahead: int = Query(7, ge=1, le=14),
+    days_ahead: int = Query(30, ge=1, le=90),
     season: int = Query(2024),
     x_sync_token: str | None = Header(default=None, alias="X-Sync-Token"),
 ):

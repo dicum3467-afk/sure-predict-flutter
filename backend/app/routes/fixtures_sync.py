@@ -130,6 +130,7 @@ def admin_sync_fixtures(
                             "season": season,
                             "from": str(date_from),
                             "to": str(date_to),
+                            "status": "NS", # 🔥 DOAR MECIURI NEÎNCEPUTE
                         },
                         timeout=30,
                     )

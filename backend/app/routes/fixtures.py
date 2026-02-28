@@ -29,7 +29,7 @@ def list_fixtures(
         description="Câte zile înapoi să includă (implicit 2). 0 = doar viitor."
     ),
     upcoming_days: int = Query(
-        14, ge=1, le=60,
+        30, ge=1, le=90,
         description="Câte zile înainte să includă (implicit 14)."
     ),
     limit: int = Query(50, ge=1, le=200),

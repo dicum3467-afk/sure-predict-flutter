@@ -36,7 +36,7 @@ async def sync_fixtures(
             detail=f"League {league} not found in DB (table leagues). Sync leagues first / insert it.",
         )
 
-    league_uuid = row[0]
+    league_uuid = row[id]
 
     # 2) fetch fixtures
     url = "https://v3.football.api-sports.io/fixtures"

@@ -11,23 +11,15 @@ from psycopg2.extras import RealDictCursor
 def get_conn():
     """
     Context manager pentru conexiune Postgres.
-
-    ✔ ia DATABASE_URL din env
-    ✔ commit automat la succes
-    ✔ rollback la eroare
-    ✔ închide conexiunea automat
-
-    Folosire corectă:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                ...
+    - ia DATABASE_URL din env
+    - face commit la succes / rollback la eroare
+    - inchide conexiunea automat
     """
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
         raise RuntimeError("DATABASE_URL is missing")
 
     conn = psycopg2.connect(dsn)
-
     try:
         yield conn
         conn.commit()
@@ -35,9 +27,12 @@ def get_conn():
         conn.rollback()
         raise
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def dict_cursor(conn):
-    """Cursor care returnează dict-uri (JSON friendly)."""
+    """Cursor care returneaza dict-uri (JSON friendly)."""
     return conn.cursor(cursor_factory=RealDictCursor)

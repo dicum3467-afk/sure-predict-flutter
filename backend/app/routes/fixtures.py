@@ -1,257 +1,179 @@
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone, timedelta
+from __future__ import annotations
 
-import os
-import requests
-from fastapi import APIRouter, HTTPException, Query, Header
+from datetime import datetime, timedelta, timezone, date
+from typing import Optional, List, Dict, Any, Tuple
+
+from fastapi import APIRouter, Query, HTTPException
 
 from app.db import get_conn
 
 router = APIRouter(tags=["fixtures"])
 
-API_KEY = os.getenv("API_FOOTBALL_KEY")
-SYNC_TOKEN = os.getenv("SYNC_TOKEN")
+
+def _default_window_utc() -> Tuple[date, date]:
+    """Implicit: past 7 zile + next 14 zile (UTC)."""
+    today = datetime.now(timezone.utc).date()
+    frm = today - timedelta(days=7)
+    to = today + timedelta(days=14)
+    return frm, to
 
 
-def _require_api_key():
-    if not API_KEY:
-        raise HTTPException(status_code=500, detail="Missing API_FOOTBALL_KEY env var")
-
-
-def _check_token(x_sync_token: Optional[str]):
-    if not SYNC_TOKEN:
-        raise HTTPException(status_code=500, detail="Missing SYNC_TOKEN env var")
-    if not x_sync_token or x_sync_token != SYNC_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid X-Sync-Token")
-
-
-def _infer_season_year(today_utc: datetime) -> int:
-    """
-    API-Football folosește 'season' ca anul de start al sezonului.
-    Exemplu: Feb 2026 => sezonul e 2025 (2025-2026).
-    Heuristic simplu: dacă luna >= 7 => season = anul curent, altfel anul anterior.
-    """
-    y = today_utc.year
-    m = today_utc.month
-    return y if m >= 7 else y - 1
+def _parse_date(s: Optional[str]) -> Optional[date]:
+    if not s:
+        return None
+    return datetime.fromisoformat(s).date()
 
 
 @router.get("/fixtures")
 def list_fixtures(
-    league_id: Optional[int] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-) -> List[Dict[str, Any]]:
+    # filtre
+    league_uuid: Optional[str] = Query(None, description="UUID din tabela leagues (ex: 9a0... )"),
+    provider_league_id: Optional[int] = Query(None, description="ID liga din API-Football (ex: 39, 140)"),
+    status: Optional[str] = Query(
+        None,
+        description="Filtru status-uri separate prin virgula (ex: NS,FT,1H). Dacă lipsește, nu filtrează.",
+    ),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD (UTC). Dacă lipsește -> past 7 zile."),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD (UTC). Dacă lipsește -> next 14 zile."),
+
+    # paginare
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+
+    # ordonare
+    order: str = Query("asc", pattern="^(asc|desc)$"),
+) -> Dict[str, Any]:
     """
-    Listează meciuri din DB.
+    Returnează fixtures cu paginare + filtre.
+    Default: past 7 zile + next 14 zile (UTC), toate statusurile.
     """
     try:
-        conn = get_conn()
-    except RuntimeError:
-        raise HTTPException(status_code=503, detail="Database not configured (missing DATABASE_URL).")
+        frm = _parse_date(date_from)
+        to = _parse_date(date_to)
+        if frm is None or to is None:
+            dfrm, dto = _default_window_utc()
+            frm = frm or dfrm
+            to = to or dto
 
-    where = ["1=1"]
-    params: List[Any] = []
+        status_list: Optional[List[str]] = None
+        if status:
+            status_list = [x.strip() for x in status.split(",") if x.strip()]
+            if not status_list:
+                status_list = None
 
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                # convert API league id -> UUID (din tabela leagues)
-                if league_id is not None:
-                    cur.execute(
-                        "SELECT id FROM leagues WHERE provider_league_id = %s LIMIT 1",
-                        (league_id,),
-                    )
-                    row = cur.fetchone()
-                    if not row:
-                        raise HTTPException(status_code=404, detail=f"League {league_id} not found in DB")
-                    league_uuid = row[0]
-                    where.append("league_id = %s")
-                    params.append(league_uuid)
+        offset = (page - 1) * per_page
 
-                if date_from:
-                    where.append("kickoff_at >= %s")
-                    params.append(date_from)
+        where_clauses = ["f.kickoff_at::date >= %(frm)s", "f.kickoff_at::date <= %(to)s"]
+        params: Dict[str, Any] = {"frm": frm, "to": to, "limit": per_page, "offset": offset}
 
-                if date_to:
-                    where.append("kickoff_at <= %s")
-                    params.append(date_to)
+        if league_uuid:
+            where_clauses.append("f.league_id = %(league_uuid)s")
+            params["league_uuid"] = league_uuid
 
-                if status:
-                    where.append("status = %s")
-                    params.append(status)
+        if provider_league_id is not None:
+            where_clauses.append("l.provider_league_id = %(provider_league_id)s")
+            params["provider_league_id"] = provider_league_id
 
-                where_sql = " WHERE " + " AND ".join(where)
+        if status_list is not None:
+            where_clauses.append("f.status = ANY(%(status_list)s)")
+            params["status_list"] = status_list
 
-                cur.execute(
-                    f"""
-                    SELECT
-                        id,
-                        league_id,
-                        provider_fixture_id,
-                        home_team,
-                        away_team,
-                        kickoff_at,
-                        status,
-                        home_goals,
-                        away_goals
-                    FROM fixtures
-                    {where_sql}
-                    ORDER BY kickoff_at ASC
-                    LIMIT %s OFFSET %s
-                    """,
-                    (*params, limit, offset),
-                )
-                rows = cur.fetchall()
+        where_sql = " AND ".join(where_clauses)
+        order_sql = "ASC" if order == "asc" else "DESC"
 
-        return rows
+        count_sql = f"""
+            SELECT COUNT(*)
+            FROM fixtures f
+            JOIN leagues l ON l.id = f.league_id
+            WHERE {where_sql}
+        """
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        data_sql = f"""
+            SELECT
+                f.id,
+                f.league_id,
+                l.provider_league_id,
+                l.name AS league_name,
+                l.country AS league_country,
+                f.provider_fixture_id,
+                f.kickoff_at,
+                f.status,
+                f.home_team,
+                f.away_team,
+                f.home_goals,
+                f.away_goals,
+                f.season,
+                f.round
+            FROM fixtures f
+            JOIN leagues l ON l.id = f.league_id
+            WHERE {where_sql}
+            ORDER BY f.kickoff_at {order_sql}
+            LIMIT %(limit)s OFFSET %(offset)s
+        """
 
-
-@router.post("/fixtures/admin-sync")
-def admin_sync_fixtures(
-    days_ahead: int = Query(30, ge=1, le=90),          # ✅ acum max 90
-    past_days: int = Query(2, ge=0, le=14),            # ✅ ultimele N zile (pt rezultate recente)
-    season: Optional[int] = Query(None),               # ✅ dacă nu dai, o calculează
-    x_sync_token: Optional[str] = Header(default=None, alias="X-Sync-Token"),
-):
-    """
-    Sync fixtures din API-Football în tabela fixtures, pentru ligile active din tabela leagues.
-    Ia meciuri viitoare + ultimele 'past_days' zile.
-    """
-    _check_token(x_sync_token)
-    _require_api_key()
-
-    now_utc = datetime.now(timezone.utc)
-    if season is None:
-        season = _infer_season_year(now_utc)
-
-    date_from = (now_utc.date() - timedelta(days=past_days))
-    date_to = (now_utc.date() + timedelta(days=days_ahead))
-
-    inserted = 0
-    skipped = 0
-
-    try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT id, provider_league_id
-                    FROM leagues
-                    WHERE is_active = true
-                    """
-                )
-                leagues = cur.fetchall()
+                cur.execute(count_sql, params)
+                total = int(cur.fetchone()[0])
 
-                headers = {
-                    "x-apisports-key": API_KEY,
-                    "accept": "application/json",
+                cur.execute(data_sql, params)
+                rows = cur.fetchall()
+
+        items: List[Dict[str, Any]] = []
+        for r in rows:
+            items.append(
+                {
+                    "id": r[0],
+                    "league_id": r[1],
+                    "provider_league_id": r[2],
+                    "league_name": r[3],
+                    "league_country": r[4],
+                    "provider_fixture_id": r[5],
+                    "kickoff_at": r[6].isoformat() if hasattr(r[6], "isoformat") else r[6],
+                    "status": r[7],
+                    "home_team": r[8],
+                    "away_team": r[9],
+                    "home_goals": r[10],
+                    "away_goals": r[11],
+                    "season": r[12],
+                    "round": r[13],
                 }
-
-                for league_uuid, provider_league_id in leagues:
-                    resp = requests.get(
-                        "https://v3.football.api-sports.io/fixtures",
-                        headers=headers,
-                        params={
-                            "league": provider_league_id,
-                            "season": season,
-                            "from": str(date_from),
-                            "to": str(date_to),
-                            # ⚠️ NU filtrăm doar NS, ca să prinzi și rezultate recente
-                        },
-                        timeout=30,
-                    )
-
-                    if resp.status_code != 200:
-                        raise HTTPException(
-                            status_code=500,
-                            detail=f"API error league {provider_league_id}: {resp.status_code}",
-                        )
-
-                    data = resp.json()
-                    items = data.get("response", []) or []
-
-                    for item in items:
-                        fx = item.get("fixture", {}) or {}
-                        teams = item.get("teams", {}) or {}
-                        goals = item.get("goals", {}) or {}
-                        status_info = fx.get("status", {}) or {}
-
-                        provider_fixture_id = fx.get("id")
-                        kickoff_iso = fx.get("date")  # ISO string
-                        status_short = status_info.get("short")  # e.g. NS, FT, 1H
-                        home_name = (teams.get("home") or {}).get("name")
-                        away_name = (teams.get("away") or {}).get("name")
-                        home_goals = goals.get("home")
-                        away_goals = goals.get("away")
-
-                        if not provider_fixture_id or not kickoff_iso:
-                            skipped += 1
-                            continue
-
-                        # Upsert (dacă ai unique index pe provider_fixture_id)
-                        cur.execute(
-                            """
-                            INSERT INTO fixtures (
-                                league_id,
-                                provider_fixture_id,
-                                home_team,
-                                away_team,
-                                kickoff_at,
-                                status,
-                                home_goals,
-                                away_goals
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (provider_fixture_id)
-                            DO UPDATE SET
-                                league_id = EXCLUDED.league_id,
-                                home_team = EXCLUDED.home_team,
-                                away_team = EXCLUDED.away_team,
-                                kickoff_at = EXCLUDED.kickoff_at,
-                                status = EXCLUDED.status,
-                                home_goals = EXCLUDED.home_goals,
-                                away_goals = EXCLUDED.away_goals
-                            """,
-                            (
-                                league_uuid,
-                                str(provider_fixture_id),
-                                home_name,
-                                away_name,
-                                kickoff_iso,
-                                status_short,
-                                home_goals,
-                                away_goals,
-                            ),
-                        )
-                        inserted += 1
-
-            conn.commit()
+            )
 
         return {
-            "ok": True,
-            "leagues": len(leagues),
-            "inserted": inserted,
-            "skipped": skipped,
-            "from": str(date_from),
-            "to": str(date_to),
-            "season": season,
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "from": str(frm),
+            "to": str(to),
+            "order": order,
+            "items": items,
         }
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
+
+
+@router.get("/fixtures/by-league")
+def list_fixtures_by_league(
+    provider_league_id: int = Query(..., description="ID liga API-Football (ex: 39, 140)"),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD (UTC)"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD (UTC)"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+    order: str = Query("asc", pattern="^(asc|desc)$"),
+) -> Dict[str, Any]:
+    """
+    Shortcut: fixtures pentru o ligă (provider_league_id) cu paginare.
+    Default: past 7 + next 14 zile.
+    """
+    return list_fixtures(
+        league_uuid=None,
+        provider_league_id=provider_league_id,
+        status=None,
+        date_from=date_from,
+        date_to=date_to,
+        page=page,
+        per_page=per_page,
+        order=order,
+                    )

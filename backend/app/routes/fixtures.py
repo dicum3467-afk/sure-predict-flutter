@@ -1,14 +1,6 @@
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, Query
-
-from app.db import get_conn
-
-router = APIRouter(tags=["fixtures"])
-
-
 @router.get("/fixtures")
 def list_fixtures(
-    league_id: Optional[str] = Query(None),
+    league_id: Optional[int] = Query(None),  # ⚠️ era string
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
@@ -26,27 +18,43 @@ def list_fixtures(
     where = ["1=1"]
     params = []
 
-    if league_id:
-        where.append("league_id = %s")
-        params.append(league_id)
-
-    if date_from:
-        where.append("fixture_date >= %s")
-        params.append(date_from)
-
-    if date_to:
-        where.append("fixture_date <= %s")
-        params.append(date_to)
-
-    if status:
-        where.append("status = %s")
-        params.append(status)
-
-    where_sql = "WHERE " + " AND ".join(where)
-
     try:
         with conn:
             with conn.cursor() as cur:
+
+                # ✅ CONVERSIE league_id -> UUID
+                if league_id is not None:
+                    cur.execute(
+                        "SELECT id FROM leagues WHERE api_league_id = %s LIMIT 1",
+                        (league_id,),
+                    )
+                    row = cur.fetchone()
+
+                    if not row:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"League {league_id} not found in DB",
+                        )
+
+                    league_uuid = row["id"] if isinstance(row, dict) else row[0]
+
+                    where.append("league_id = %s")
+                    params.append(league_uuid)
+
+                if date_from:
+                    where.append("fixture_date >= %s")
+                    params.append(date_from)
+
+                if date_to:
+                    where.append("fixture_date <= %s")
+                    params.append(date_to)
+
+                if status:
+                    where.append("status = %s")
+                    params.append(status)
+
+                where_sql = "WHERE " + " AND ".join(where)
+
                 cur.execute(
                     f"""
                     SELECT
@@ -67,12 +75,14 @@ def list_fixtures(
                     """,
                     (*params, limit, offset),
                 )
+
                 rows = cur.fetchall()
 
         return rows
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
+
     finally:
         try:
             conn.close()

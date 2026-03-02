@@ -1,9 +1,12 @@
-from .leagues import router as leagues_router
-from .fixtures_by_league import router as fixtures_by_league_router
-from .fixtures_sync import router as fixtures_sync_router
+# backend/app/routes/__init__.py
+"""
+Package pentru toate routerele FastAPI.
 
-__all__ = [
-    "leagues_router",
-    "fixtures_by_league_router",
-    "fixtures_sync_router",
-]
+Folosește importuri explicite ca să fie clar ce există în proiect.
+"""
+from __future__ import annotations
+
+from . import fixtures_sync  # noqa: F401
+# când mai adaugi fișiere noi:
+# from . import leagues  # noqa: F401
+# from . import predictions  # noqa: F401

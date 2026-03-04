@@ -1,7 +1,9 @@
 from fastapi import APIRouter
 
-from .jobs import router as jobs_router
-...
+from .predictions import router as predictions_router
+from .jobs import router as jobs_router  # dacă nu ai deja
+
+api_router.include_router(predictions_router)
 api_router.include_router(jobs_router)
 from .leagues import router as leagues_router
 from .fixtures import router as fixtures_router

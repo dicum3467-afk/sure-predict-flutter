@@ -1,22 +1,42 @@
-# backend/app/routes/fixtures_sync.py
 from __future__ import annotations
+from fastapi import APIRouter, Header, HTTPException, Query
 
-import os
-import time
-import logging
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone, date
-from typing import Optional, Dict, Any, List, Tuple
+from app.core.queue import queue
+from app.jobs.fixtures_sync_job import run_fixtures_sync_job
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+router = APIRouter(prefix="/fixtures", tags=["Fixtures Sync"])
 
-from fastapi import APIRouter, HTTPException, Query, Header
+SYNC_TOKEN = "surepredict123"  # sau os.getenv("SYNC_TOKEN")
 
-from app.db import get_conn  # IMPORTANT: get_conn e context manager (returneaza connection)
+@router.post("/admin-sync")
+def admin_sync(
+    days_ahead: int = Query(30, ge=1, le=90),
+    past_days: int = Query(7, ge=0, le=90),
+    season: int | None = Query(None),
+    max_pages: int = Query(5, ge=1, le=50),
+    season_lookback: int = Query(2, ge=0, le=5),
+    x_sync_token: str | None = Header(None, alias="X-Sync-Token"),
+):
+    if x_sync_token != SYNC_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-router = APIRouter(tags=["fixtures"])
+    if not queue:
+        raise HTTPException(status_code=500, detail="Queue not configured. Set REDIS_URL.")
+
+    job = queue.enqueue(
+        run_fixtures_sync_job,
+        days_ahead=days_ahead,
+        past_days=past_days,
+        season=season,
+        max_pages=max_pages,
+        season_lookback=season_lookback,
+        retry=None,  # RQ retry e opțional; noi avem retry intern pe HTTP
+        result_ttl=3600,  # păstrează rezultatul 1h
+        ttl=3600,
+        job_timeout=900,  # max 15 min
+    )
+
+    return {"ok": True, "job_id": job.id, "status_url": f"/jobs/{job.id}"}
 
 # -----------------------------------------------------------------------------
 # CONFIG

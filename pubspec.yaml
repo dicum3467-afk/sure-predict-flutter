@@ -8,26 +8,17 @@ environment:
   sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
-  http: ^1.2.2
-    intl: any 
   flutter:
     sdk: flutter
-
-  # 🌐 API calls
-  http: ^1.2.1
-
-  # ⭐ persist favorites + settings + cache
+  http: ^1.2.2
+  intl: any
   shared_preferences: ^2.2.3
-
-  # 💰 Ads
   google_mobile_ads: ^5.1.0
-
   cupertino_icons: ^1.0.8
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
   flutter_lints: ^3.0.2
 
 flutter:

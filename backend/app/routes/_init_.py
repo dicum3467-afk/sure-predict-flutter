@@ -3,7 +3,13 @@ from fastapi import APIRouter
 from .predictions import router as predictions_router
 from .jobs import router as jobs_router  # dacă nu ai deja
 from .evaluation import router as evaluation_router
+from .odds import router as odds_router
+from .value import router as value_router
+from .evaluation import router as evaluation_router
 
+api_router.include_router(odds_router)
+api_router.include_router(value_router)
+api_router.include_router(evaluation_router)
 api_router.include_router(evaluation_router)
 api_router.include_router(predictions_router)
 api_router.include_router(jobs_router)

@@ -30,7 +30,7 @@ class SurePredictApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const AppShell(),
+      home: FixturesScreen(),
     );
   }
 }

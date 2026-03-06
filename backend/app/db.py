@@ -4,6 +4,7 @@ import os
 from contextlib import contextmanager
 
 import psycopg2
+from psycopg2.extras import RealDictCursor
 
 
 @contextmanager
@@ -21,3 +22,7 @@ def get_conn():
         raise
     finally:
         conn.close()
+
+
+def dict_cursor(conn):
+    return conn.cursor(cursor_factory=RealDictCursor)

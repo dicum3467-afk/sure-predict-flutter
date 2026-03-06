@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class PredictionsService {
-  static const baseUrl =
+  static const String baseUrl =
       "https://sure-predict-backend.onrender.com";
 
   static Future<List<dynamic>> fetchPredictions() async {
@@ -11,10 +11,12 @@ class PredictionsService {
     );
 
     if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      return data["items"];
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      return (data["items"] as List<dynamic>? ?? []);
     } else {
-      throw Exception("Failed to load predictions");
+      throw Exception(
+        "Failed to load predictions: ${response.statusCode}",
+      );
     }
   }
 }

@@ -68,10 +68,7 @@ class FixtureCard extends StatelessWidget {
                   ),
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 8),
-                    child: Text(
-                      'vs',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
+                    child: Text('vs'),
                   ),
                   Expanded(
                     child: Text(

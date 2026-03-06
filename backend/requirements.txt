@@ -5,3 +5,5 @@ python-dotenv
 supabase
 redis
 rq
+psycopg2-binary
+requests

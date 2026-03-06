@@ -5,6 +5,7 @@ from contextlib import contextmanager
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from supabase import create_client, Client
 
 
 @contextmanager
@@ -26,3 +27,12 @@ def get_conn():
 
 def dict_cursor(conn):
     return conn.cursor(cursor_factory=RealDictCursor)
+
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+supabase_client: Client | None = None
+
+if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+    supabase_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)

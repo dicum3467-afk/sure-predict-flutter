@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -5,12 +8,18 @@ from app.routes import api_router
 
 app = FastAPI(
     title="Sure Predict Backend",
-    version="1.0"
+    version=os.getenv("APP_VERSION", "1.0.0"),
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
+
+cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+cors_origins = [o.strip() for o in cors_origins if o.strip()] or ["*"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -19,6 +28,18 @@ app.add_middleware(
 app.include_router(api_router)
 
 
-@app.get("/")
+@app.get("/", tags=["Meta"])
 def root():
-    return {"status": "backend running"}
+    return {
+        "ok": True,
+        "service": "sure-predict-backend",
+        "version": app.version,
+    }
+
+
+@app.get("/health", tags=["Meta"])
+def health():
+    return {
+        "ok": True,
+        "status": "healthy",
+    }

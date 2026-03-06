@@ -93,7 +93,7 @@ def list_fixtures(
                 at.short_name AS away_team_short,
                 at.logo_url AS away_team_logo,
 
-                f.season,
+                f.season_id,
                 f.round
             FROM fixtures f
             JOIN leagues l ON l.id = f.league_id
@@ -114,15 +114,17 @@ def list_fixtures(
 
         items: List[Dict[str, Any]] = []
         for r in rows:
+            kickoff_value = r[6].isoformat() if hasattr(r[6], "isoformat") else str(r[6])
+
             items.append(
                 {
-                    "id": r[0],
+                    "id": str(r[0]),
                     "league_id": str(r[1]),
                     "provider_league_id": r[2],
                     "league_name": r[3],
                     "league_country": r[4],
                     "provider_fixture_id": r[5],
-                    "kickoff_at": r[6].isoformat() if hasattr(r[6], "isoformat") else r[6],
+                    "kickoff_at": kickoff_value,
                     "status": r[7],
                     "home_team": {
                         "id": str(r[8]),
@@ -138,7 +140,7 @@ def list_fixtures(
                         "short": r[16],
                         "logo": r[17],
                     },
-                    "season": r[18],
+                    "season": str(r[18]) if r[18] is not None else None,
                     "round": r[19],
                 }
             )

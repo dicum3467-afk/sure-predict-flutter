@@ -22,13 +22,11 @@ class _FixturesScreenState extends State<FixturesScreen> {
   Widget build(BuildContext context) {
 
     return Scaffold(
-
       appBar: AppBar(
         title: const Text("Sure Predict"),
       ),
 
       body: FutureBuilder(
-
         future: fixtures,
 
         builder: (context, snapshot) {
@@ -40,7 +38,6 @@ class _FixturesScreenState extends State<FixturesScreen> {
           final matches = snapshot.data as List;
 
           return ListView.builder(
-
             itemCount: matches.length,
 
             itemBuilder: (context, index) {
@@ -49,15 +46,15 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
               return Card(
                 margin: const EdgeInsets.all(8),
-                child: ListTile(
 
+                child: ListTile(
                   title: Text(
-                      "${match["home_team"]["name"]} vs ${match["away_team"]["name"]}"),
+                    "${match["home_team"]["name"]} vs ${match["away_team"]["name"]}",
+                  ),
 
                   subtitle: Text(match["league_name"]),
 
                   trailing: Text(match["status"]),
-
                 ),
               );
             },

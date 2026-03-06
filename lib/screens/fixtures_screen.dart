@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import 'match_analysis_screen.dart';
 
 class FixturesScreen extends StatefulWidget {
   const FixturesScreen({super.key});
@@ -9,7 +10,6 @@ class FixturesScreen extends StatefulWidget {
 }
 
 class _FixturesScreenState extends State<FixturesScreen> {
-
   late Future fixtures;
 
   @override
@@ -20,17 +20,13 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
   @override
   Widget build(BuildContext context) {
-
     return Scaffold(
       appBar: AppBar(
         title: const Text("Sure Predict"),
       ),
-
       body: FutureBuilder(
         future: fixtures,
-
         builder: (context, snapshot) {
-
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
@@ -39,22 +35,28 @@ class _FixturesScreenState extends State<FixturesScreen> {
 
           return ListView.builder(
             itemCount: matches.length,
-
             itemBuilder: (context, index) {
-
               final match = matches[index];
 
               return Card(
                 margin: const EdgeInsets.all(8),
-
                 child: ListTile(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => MatchAnalysisScreen(match: match),
+                      ),
+                    );
+                  },
                   title: Text(
                     "${match["home_team"]["name"]} vs ${match["away_team"]["name"]}",
                   ),
-
-                  subtitle: Text(match["league_name"]),
-
+                  subtitle: Text(
+                    "${match["league_name"]}\n${match["kickoff_at"]}",
+                  ),
                   trailing: Text(match["status"]),
+                  isThreeLine: true,
                 ),
               );
             },

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'screens/app_shell.dart';
+import 'screens/fixtures_screen.dart';
 
 void main() {
   runApp(const SurePredictApp());
@@ -13,16 +13,20 @@ class SurePredictApp extends StatelessWidget {
     return MaterialApp(
       title: 'Sure Predict',
       debugShowCheckedModeBanner: false,
+
       themeMode: ThemeMode.dark,
+
       theme: ThemeData(
         useMaterial3: true,
         colorSchemeSeed: Colors.blue,
       ),
+
       darkTheme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
         colorSchemeSeed: Colors.blue,
         scaffoldBackgroundColor: const Color(0xFF0B1220),
+
         cardTheme: CardTheme(
           elevation: 0,
           shape: RoundedRectangleBorder(
@@ -30,7 +34,8 @@ class SurePredictApp extends StatelessWidget {
           ),
         ),
       ),
-      home: FixturesScreen(),
+
+      home: const FixturesScreen(),
     );
   }
 }

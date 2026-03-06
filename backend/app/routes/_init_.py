@@ -13,14 +13,12 @@ from .teams_sync import router as teams_sync_router
 
 api_router = APIRouter()
 
-# Public
 api_router.include_router(leagues_router)
 api_router.include_router(fixtures_router)
 api_router.include_router(fixtures_by_league_router)
 api_router.include_router(teams_router)
 api_router.include_router(predictions_router)
 
-# Admin / sync
 api_router.include_router(admin_router)
 api_router.include_router(admin_hub_router)
 api_router.include_router(leagues_sync_router)

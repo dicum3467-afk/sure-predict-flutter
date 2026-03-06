@@ -27,6 +27,7 @@ app.add_middleware(
 
 app.include_router(api_router)
 
+
 @app.get("/", tags=["Meta"])
 def root():
     return {
@@ -35,12 +36,14 @@ def root():
         "version": app.version,
     }
 
+
 @app.get("/health", tags=["Meta"])
 def health():
     return {
         "ok": True,
         "status": "healthy",
     }
+
 
 @app.get("/meta", tags=["Meta"])
 def meta():
@@ -49,4 +52,4 @@ def meta():
         "env": os.getenv("ENV", "production"),
         "cors_origins": cors_origins,
         "version": app.version,
-}
+    }

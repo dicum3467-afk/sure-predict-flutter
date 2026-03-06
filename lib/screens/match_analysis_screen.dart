@@ -1,481 +1,379 @@
 import 'package:flutter/material.dart';
-import '../models/api_models.dart';
-import '../models/app_models.dart';
-import '../services/api_service.dart';
 
-class MatchAnalysisScreen extends StatefulWidget {
-  final FixtureUiModel fixture;
+class MatchAnalysisScreen extends StatelessWidget {
+  final Map<String, dynamic> match;
 
   const MatchAnalysisScreen({
     super.key,
-    required this.fixture,
+    required this.match,
   });
 
-  @override
-  State<MatchAnalysisScreen> createState() => _MatchAnalysisScreenState();
-}
-
-class _MatchAnalysisScreenState extends State<MatchAnalysisScreen>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabController;
-  final ApiService _apiService = ApiService();
-
-  PredictionResponse? prediction;
-  ValuePicksResponse? valuePicks;
-  bool isLoading = true;
-  String? error;
-
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 3, vsync: this);
-    _loadData();
-  }
-
-  Future<void> _loadData() async {
-    try {
-      final pred =
-          await _apiService.getPredictionByFixture(widget.fixture.fixtureId);
-      final value =
-          await _apiService.getValueByFixture(widget.fixture.fixtureId);
-
-      if (!mounted) return;
-      setState(() {
-        prediction = pred;
-        valuePicks = value;
-        isLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        error = e.toString();
-        isLoading = false;
-      });
-    }
-  }
-
-  String _formatPercent(dynamic value) {
-    final v = (value ?? 0).toDouble() * 100;
-    return '${v.toStringAsFixed(1)}%';
-  }
-
-  String _formatDouble(dynamic value, {int digits = 2}) {
-    return ((value ?? 0).toDouble()).toStringAsFixed(digits);
-  }
-
-  String _formatKickoff(DateTime dt) {
-    final local = dt.toLocal();
-    return "${local.day}.${local.month}.${local.year} "
-        "${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}";
+  double _fakeConfidence(String home, String away) {
+    final total = home.length + away.length;
+    return 50 + (total % 21).toDouble();
   }
 
   @override
   Widget build(BuildContext context) {
-    final fixture = widget.fixture;
+    final home = match["home_team"]?["name"] ?? "Home";
+    final away = match["away_team"]?["name"] ?? "Away";
+    final league = match["league_name"] ?? "-";
+    final kickoff = match["kickoff_at"] ?? "-";
+    final status = match["status"] ?? "-";
+
+    final homeWin = _fakeConfidence(home, away).clamp(45, 68);
+    final draw = 24.0;
+    final awayWin = (100 - homeWin - draw).clamp(10, 35);
+
+    final ggYes = ((home.length * 3 + away.length * 2) % 35 + 45).toDouble();
+    final over25 = ((home.length * 4 + away.length) % 30 + 48).toDouble();
+
+    final topPick = homeWin >= ggYes && homeWin >= over25
+        ? "1"
+        : ggYes >= over25
+            ? "GG"
+            : "Over 2.5";
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Match Analysis'),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: 'Analysis'),
-            Tab(text: 'Predictions'),
-            Tab(text: 'Value Picks'),
-          ],
-        ),
+        title: const Text("Match Analysis"),
       ),
-      body: Column(
+      body: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          _MatchHeaderCard(
-            leagueName: fixture.leagueName,
-            homeTeam: fixture.homeTeam,
-            awayTeam: fixture.awayTeam,
-            kickoffText: _formatKickoff(fixture.kickoffAt),
+          _HeaderCard(
+            league: league.toString(),
+            kickoff: kickoff.toString(),
+            status: status.toString(),
+            home: home.toString(),
+            away: away.toString(),
           ),
-          Expanded(
-            child: isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : error != null
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text(
-                            error!,
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      )
-                    : TabBarView(
-                        controller: _tabController,
-                        children: [
-                          _buildAnalysisTab(),
-                          _buildPredictionsTab(),
-                          _buildValueTab(),
-                        ],
-                      ),
+          const SizedBox(height: 16),
+          _SectionTitle("Top prediction"),
+          _TopPickCard(
+            pick: topPick,
+            confidence: topPick == "1"
+                ? homeWin
+                : topPick == "GG"
+                    ? ggYes
+                    : over25,
+          ),
+          const SizedBox(height: 16),
+          _SectionTitle("1X2 probabilities"),
+          _ProbabilityCard(
+            title: "Home Win",
+            value: homeWin,
+          ),
+          _ProbabilityCard(
+            title: "Draw",
+            value: draw,
+          ),
+          _ProbabilityCard(
+            title: "Away Win",
+            value: awayWin,
+          ),
+          const SizedBox(height: 16),
+          _SectionTitle("Goals markets"),
+          _ProbabilityCard(
+            title: "GG",
+            value: ggYes,
+          ),
+          _ProbabilityCard(
+            title: "Over 2.5",
+            value: over25,
+          ),
+          _ProbabilityCard(
+            title: "Under 2.5",
+            value: (100 - over25).clamp(5, 95),
+          ),
+          const SizedBox(height: 16),
+          _SectionTitle("Quick analysis"),
+          _InfoCard(
+            title: "Form summary",
+            text:
+                "$home pare ușor favorit pe baza analizei demo. $away rămâne periculos și are șanse bune să marcheze.",
+          ),
+          _InfoCard(
+            title: "Goals expectation",
+            text:
+                "Meciul are profil moderat spre ofensiv. GG și Over 2.5 sunt piețe bune pentru monitorizare.",
+          ),
+          _InfoCard(
+            title: "Best use",
+            text:
+                "Folosește acest ecran ca bază UI. După aceea îl conectăm la endpoint real de predictions din backend.",
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildAnalysisTab() {
-    final inputs = prediction?.inputs ?? {};
-    final metrics = prediction?.metrics ?? {};
-    final probs = prediction?.probs ?? {};
+class _HeaderCard extends StatelessWidget {
+  final String league;
+  final String kickoff;
+  final String status;
+  final String home;
+  final String away;
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _sectionTitle('Expected Goals'),
-        Row(
-          children: [
-            Expanded(
-              child: _statCard(
-                title: 'Home xG',
-                value: _formatDouble(inputs['lambda_home']),
-                icon: Icons.home_rounded,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _statCard(
-                title: 'Away xG',
-                value: _formatDouble(inputs['lambda_away']),
-                icon: Icons.flight_takeoff_rounded,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        _sectionTitle('Confidence'),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                LinearProgressIndicator(
-                  value: ((metrics['confidence_1x2'] ?? 0).toDouble()),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  _formatPercent(metrics['confidence_1x2']),
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        _sectionTitle('Main Picks'),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            _pickChip(
-              '1X2',
-              prediction?.picks['1x2']?['pick']?.toString() ?? '-',
-            ),
-            _pickChip(
-              'GG',
-              prediction?.picks['gg']?['pick']?.toString() ?? '-',
-            ),
-            _pickChip(
-              'O/U 2.5',
-              prediction?.picks['ou25']?['pick']?.toString() ?? '-',
-            ),
-            _pickChip(
-              'HT',
-              prediction?.picks['ht']?['pick']?.toString() ?? '-',
-            ),
-            _pickChip(
-              'HT/FT',
-              prediction?.picks['htft']?['pick']?.toString() ?? '-',
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        _sectionTitle('Top Scorelines'),
-        Card(
-          child: Column(
-            children: (probs['top_scorelines'] as List? ?? [])
-                .map((e) => Map<String, dynamic>.from(e))
-                .map(
-                  (e) => ListTile(
-                    title: Text('${e['home']}-${e['away']}'),
-                    trailing: Text(_formatPercent(e['p'])),
-                  ),
-                )
-                .toList(),
-          ),
-        ),
-      ],
-    );
-  }
+  const _HeaderCard({
+    required this.league,
+    required this.kickoff,
+    required this.status,
+    required this.home,
+    required this.away,
+  });
 
-  Widget _buildPredictionsTab() {
-    final probs = prediction?.probs ?? {};
-
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _sectionTitle('1X2'),
-        _marketCard({
-          '1': _formatPercent(probs['1x2']?['1']),
-          'X': _formatPercent(probs['1x2']?['X']),
-          '2': _formatPercent(probs['1x2']?['2']),
-        }, columns: 3),
-        const SizedBox(height: 16),
-        _sectionTitle('Double Chance'),
-        _marketCard({
-          '1X': _formatPercent(probs['double_chance']?['1X']),
-          '12': _formatPercent(probs['double_chance']?['12']),
-          'X2': _formatPercent(probs['double_chance']?['X2']),
-        }, columns: 3),
-        const SizedBox(height: 16),
-        _sectionTitle('GG / NG'),
-        _marketCard({
-          'GG': _formatPercent(probs['gg']?['GG']),
-          'NG': _formatPercent(probs['gg']?['NG']),
-        }),
-        const SizedBox(height: 16),
-        _sectionTitle('Over / Under 2.5'),
-        _marketCard({
-          'O2.5': _formatPercent(probs['ou25']?['O2.5']),
-          'U2.5': _formatPercent(probs['ou25']?['U2.5']),
-        }),
-        const SizedBox(height: 16),
-        _sectionTitle('Half Time'),
-        _marketCard({
-          'HT1': _formatPercent(probs['ht']?['HT1']),
-          'HTX': _formatPercent(probs['ht']?['HTX']),
-          'HT2': _formatPercent(probs['ht']?['HT2']),
-        }, columns: 3),
-      ],
-    );
-  }
-
-  Widget _buildValueTab() {
-    final items = valuePicks?.items ?? [];
-
-    if (items.isEmpty) {
-      return const Center(
-        child: Text('No value picks available.'),
-      );
-    }
-
-    return ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (_, index) {
-        final item = items[index];
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${item.bookmaker} • ${item.market}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  item.selection,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 18,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text('Model: ${(item.modelProb * 100).toStringAsFixed(1)}%'),
-                Text('Fair odd: ${item.fairOdd?.toStringAsFixed(2) ?? '-'}'),
-                Text('Book odd: ${item.bookOdd.toStringAsFixed(2)}'),
-                Text('EV: ${(item.expectedValue * 100).toStringAsFixed(1)}%'),
-                Text('Edge: ${(item.edge * 100).toStringAsFixed(1)}%'),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _sectionTitle(String title) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Text(
-        title,
-        style: const TextStyle(
-          fontSize: 17,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-
-  Widget _statCard({
-    required String title,
-    required String value,
-    required IconData icon,
-  }) {
+  @override
+  Widget build(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(18),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon),
-            const SizedBox(height: 8),
-            Text(title),
-            const SizedBox(height: 6),
             Text(
-              value,
+              league,
               style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
+                fontSize: 14,
+                color: Colors.white70,
               ),
             ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    home,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                    "vs",
+                    style: TextStyle(
+                      fontSize: 18,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    away,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  kickoff,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    status,
+                    style: const TextStyle(
+                      color: Colors.lightBlueAccent,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            )
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _pickChip(String label, String value) {
-    return Container(
-      width: 150,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 16,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+class _TopPickCard extends StatelessWidget {
+  final String pick;
+  final double confidence;
 
-  Widget _marketCard(Map<String, String> items, {int columns = 2}) {
-    final entries = items.entries.toList();
+  const _TopPickCard({
+    required this.pick,
+    required this.confidence,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: GridView.builder(
-          itemCount: entries.length,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: columns,
-            childAspectRatio: 2.4,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-          ),
-          itemBuilder: (_, index) {
-            final e = entries[index];
-            return Container(
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: [
+            Container(
+              width: 68,
+              height: 68,
+              alignment: Alignment.center,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                color: Colors.blue.withOpacity(0.22),
+                borderRadius: BorderRadius.circular(20),
               ),
-              padding: const EdgeInsets.all(10),
+              child: Text(
+                pick,
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(e.key),
-                  const SizedBox(height: 4),
+                  const Text(
+                    "Best Pick",
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
                   Text(
-                    e.value,
+                    "${confidence.toStringAsFixed(1)}% confidence",
                     style: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 16,
+                      color: Colors.white70,
                     ),
                   ),
                 ],
               ),
-            );
-          },
+            )
+          ],
         ),
       ),
     );
   }
 }
 
-class _MatchHeaderCard extends StatelessWidget {
-  final String leagueName;
-  final String homeTeam;
-  final String awayTeam;
-  final String kickoffText;
+class _ProbabilityCard extends StatelessWidget {
+  final String title;
+  final double value;
 
-  const _MatchHeaderCard({
-    required this.leagueName,
-    required this.homeTeam,
-    required this.awayTeam,
-    required this.kickoffText,
+  const _ProbabilityCard({
+    required this.title,
+    required this.value,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+    final progress = (value / 100).clamp(0.0, 1.0);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Text(
+                  "${value.toStringAsFixed(1)}%",
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                  ),
+                )
+              ],
+            ),
+            const SizedBox(height: 10),
+            LinearProgressIndicator(
+              value: progress,
+              minHeight: 8,
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ],
+        ),
       ),
-      child: Column(
-        children: [
-          Text(leagueName),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  homeTeam,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+    );
+  }
+}
+
+class _InfoCard extends StatelessWidget {
+  final String title;
+  final String text;
+
+  const _InfoCard({
+    required this.title,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
               ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10),
-                child: Text('vs'),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              text,
+              style: const TextStyle(
+                color: Colors.white70,
+                height: 1.5,
               ),
-              Expanded(
-                child: Text(
-                  awayTeam,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            kickoffText,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  final String text;
+
+  const _SectionTitle(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+        ),
       ),
     );
   }

@@ -138,8 +138,8 @@ def list_fixtures(
                         "short": r[16],
                         "logo": r[17],
                     },
-                    "season": r[20],
-                    "round": r[21],
+                    "season": r[18],
+                    "round": r[19],
                 }
             )
 

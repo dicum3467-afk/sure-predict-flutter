@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 
 class ApiService {
 
-  static const String baseUrl =
+  static const baseUrl =
       "https://sure-predict-backend.onrender.com";
 
   static Future<List<dynamic>> getFixtures() async {
@@ -18,9 +18,7 @@ class ApiService {
       return data["items"];
 
     } else {
-
-      throw Exception("Failed to load fixtures");
-
+      throw Exception("API error");
     }
   }
 }

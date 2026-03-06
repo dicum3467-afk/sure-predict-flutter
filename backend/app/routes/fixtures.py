@@ -93,8 +93,6 @@ def list_fixtures(
                 at.short_name AS away_team_short,
                 at.logo_url AS away_team_logo,
 
-                f.home_goals,
-                f.away_goals,
                 f.season,
                 f.round
             FROM fixtures f
@@ -140,8 +138,6 @@ def list_fixtures(
                         "short": r[16],
                         "logo": r[17],
                     },
-                    "home_goals": r[18],
-                    "away_goals": r[19],
                     "season": r[20],
                     "round": r[21],
                 }

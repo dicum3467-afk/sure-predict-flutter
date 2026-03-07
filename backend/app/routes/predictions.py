@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Dict, Any, List
 from fastapi import APIRouter, HTTPException
 
@@ -16,15 +17,18 @@ def _round1(value: float) -> float:
     return round(value, 1)
 
 
-def _normalize_three(a: float, b: float, c: float) -> tuple[float, float, float]:
-    total = a + b + c
-    if total <= 0:
-        return 33.3, 33.3, 33.4
-    return (a / total * 100.0, b / total * 100.0, c / total * 100.0)
+def _round2(value: float) -> float:
+    return round(value, 2)
 
 
 def _safe_div(a: float, b: float) -> float:
     return a / b if b else 0.0
+
+
+def _poisson_pmf(k: int, lam: float) -> float:
+    if lam < 0:
+        lam = 0.0
+    return math.exp(-lam) * (lam ** k) / math.factorial(k)
 
 
 def _fetch_team_stats(team_id: str, league_id: str, season_id: str) -> dict | None:
@@ -104,6 +108,176 @@ def _fetch_team_stats(team_id: str, league_id: str, season_id: str) -> dict | No
     }
 
 
+def _league_baselines(league_id: str, season_id: str) -> dict:
+    sql = """
+        SELECT
+            COALESCE(AVG(CASE WHEN home_goals IS NOT NULL THEN home_goals END), 1.35) AS avg_home_goals,
+            COALESCE(AVG(CASE WHEN away_goals IS NOT NULL THEN away_goals END), 1.10) AS avg_away_goals
+        FROM fixtures
+        WHERE league_id = %s
+          AND season_id = %s
+          AND home_goals IS NOT NULL
+          AND away_goals IS NOT NULL
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (league_id, season_id))
+            row = cur.fetchone()
+
+    avg_home = float(row[0] or 1.35)
+    avg_away = float(row[1] or 1.10)
+
+    return {
+        "avg_home_goals": _clamp(avg_home, 0.6, 3.0),
+        "avg_away_goals": _clamp(avg_away, 0.4, 2.5),
+    }
+
+
+def _top_correct_scores(home_xg: float, away_xg: float, top_n: int = 4) -> List[Dict[str, Any]]:
+    scores: List[Dict[str, Any]] = []
+    for hg in range(0, 6):
+        for ag in range(0, 6):
+            p = _poisson_pmf(hg, home_xg) * _poisson_pmf(ag, away_xg)
+            scores.append({
+                "score": f"{hg}-{ag}",
+                "home_goals": hg,
+                "away_goals": ag,
+                "probability": p * 100.0,
+            })
+
+    scores.sort(key=lambda x: x["probability"], reverse=True)
+    return [
+        {
+            "score": s["score"],
+            "home_goals": s["home_goals"],
+            "away_goals": s["away_goals"],
+            "probability": _round1(s["probability"]),
+        }
+        for s in scores[:top_n]
+    ]
+
+
+def _fallback_prediction(
+    fixture_id: str,
+    provider_fixture_id: Any,
+    kickoff_at: str,
+    status: str,
+    round_name: Any,
+    league_id: str,
+    season_id: str,
+    league_name: str,
+    league_country: str,
+    home_team_id: str,
+    home_name: str,
+    home_short: Any,
+    away_team_id: str,
+    away_name: str,
+    away_short: Any,
+) -> Dict[str, Any]:
+    home_len = len(home_name)
+    away_len = len(away_name)
+    league_len = len(league_name or "")
+
+    home_adv = 8.0
+    team_name_edge = (home_len - away_len) * 0.9
+    league_bias = (league_len % 7) - 3
+
+    home_strength = 50.0 + home_adv + team_name_edge + league_bias
+    away_strength = 50.0 - home_adv - team_name_edge - league_bias
+
+    draw_base = 26.0 - abs(team_name_edge) * 0.35
+    draw_base = _clamp(draw_base, 18.0, 30.0)
+
+    total = max(home_strength + away_strength + draw_base, 1.0)
+    p1 = _round1(home_strength / total * 100.0)
+    px = _round1(draw_base / total * 100.0)
+    p2 = _round1(away_strength / total * 100.0)
+
+    gg_yes = _round1(_clamp(52.0, 35.0, 78.0))
+    gg_no = _round1(100.0 - gg_yes)
+    over25 = _round1(_clamp(54.0, 34.0, 80.0))
+    under25 = _round1(100.0 - over25)
+
+    x1 = _round1(p1 + px)
+    x2 = _round1(px + p2)
+    _12 = _round1(p1 + p2)
+
+    best_market = max(
+        {
+            "1": p1,
+            "X": px,
+            "2": p2,
+            "GG": gg_yes,
+            "OVER_2_5": over25,
+            "1X": x1,
+            "X2": x2,
+            "12": _12,
+        },
+        key=lambda k: {
+            "1": p1,
+            "X": px,
+            "2": p2,
+            "GG": gg_yes,
+            "OVER_2_5": over25,
+            "1X": x1,
+            "X2": x2,
+            "12": _12,
+        }[k],
+    )
+
+    best_confidence = {
+        "1": p1,
+        "X": px,
+        "2": p2,
+        "GG": gg_yes,
+        "OVER_2_5": over25,
+        "1X": x1,
+        "X2": x2,
+        "12": _12,
+    }[best_market]
+
+    return {
+        "fixture_id": fixture_id,
+        "provider_fixture_id": provider_fixture_id,
+        "kickoff_at": kickoff_at,
+        "status": status,
+        "round": round_name,
+        "league_id": league_id,
+        "season_id": season_id,
+        "league_name": league_name,
+        "league_country": league_country,
+        "home_team": {
+            "id": home_team_id,
+            "name": home_name,
+            "short": home_short,
+        },
+        "away_team": {
+            "id": away_team_id,
+            "name": away_name,
+            "short": away_short,
+        },
+        "model": {
+            "type": "fallback",
+        },
+        "markets": {
+            "1x2": {"1": p1, "X": px, "2": p2},
+            "double_chance": {"1X": x1, "X2": x2, "12": _12},
+            "btts": {"GG": gg_yes, "NO_GG": gg_no},
+            "ou_2_5": {"OVER_2_5": over25, "UNDER_2_5": under25},
+        },
+        "top_pick": {
+            "market": best_market,
+            "confidence": _round1(best_confidence),
+        },
+        "analysis": {
+            "summary": f"{home_name} vs {away_name}: fallback model activ.",
+            "notes": [
+                "Nu există statistici suficiente pentru modelul Poisson.",
+            ],
+        },
+    }
+
+
 def _build_prediction_from_fixture_row(row: tuple) -> Dict[str, Any]:
     """
     row:
@@ -143,194 +317,154 @@ def _build_prediction_from_fixture_row(row: tuple) -> Dict[str, Any]:
     home_stats = _fetch_team_stats(home_team_id, league_id, season_id)
     away_stats = _fetch_team_stats(away_team_id, league_id, season_id)
 
-    if home_stats and away_stats:
-        # Formă + producție ofensivă/defensivă
-        home_points_per_match = _safe_div(
-            home_stats["wins"] * 3 + home_stats["draws"],
-            max(1, home_stats["matches_played"])
-        )
-        away_points_per_match = _safe_div(
-            away_stats["wins"] * 3 + away_stats["draws"],
-            max(1, away_stats["matches_played"])
-        )
-
-        home_goals_for_avg = _safe_div(
-            home_stats["goals_for"],
-            max(1, home_stats["matches_played"])
-        )
-        home_goals_against_avg = _safe_div(
-            home_stats["goals_against"],
-            max(1, home_stats["matches_played"])
-        )
-
-        away_goals_for_avg = _safe_div(
-            away_stats["goals_for"],
-            max(1, away_stats["matches_played"])
-        )
-        away_goals_against_avg = _safe_div(
-            away_stats["goals_against"],
-            max(1, away_stats["matches_played"])
+    if not home_stats or not away_stats:
+        return _fallback_prediction(
+            fixture_id,
+            provider_fixture_id,
+            kickoff_at,
+            status,
+            round_name,
+            league_id,
+            season_id,
+            league_name,
+            league_country,
+            home_team_id,
+            home_name,
+            home_short,
+            away_team_id,
+            away_name,
+            away_short,
         )
 
-        home_form_score = _safe_div(home_stats["form_last5_points"], 15) * 100.0
-        away_form_score = _safe_div(away_stats["form_last5_points"], 15) * 100.0
+    league_base = _league_baselines(league_id, season_id)
+    avg_home_goals = league_base["avg_home_goals"]
+    avg_away_goals = league_base["avg_away_goals"]
 
-        home_btts_rate = _safe_div(
-            home_stats["btts_hits"],
-            max(1, home_stats["matches_played"])
-        ) * 100.0
-        away_btts_rate = _safe_div(
-            away_stats["btts_hits"],
-            max(1, away_stats["matches_played"])
-        ) * 100.0
+    home_home_gf = _safe_div(home_stats["home_goals_for"], max(1, home_stats["home_matches"]))
+    home_home_ga = _safe_div(home_stats["home_goals_against"], max(1, home_stats["home_matches"]))
 
-        home_over25_rate = _safe_div(
-            home_stats["over25_hits"],
-            max(1, home_stats["matches_played"])
-        ) * 100.0
-        away_over25_rate = _safe_div(
-            away_stats["over25_hits"],
-            max(1, away_stats["matches_played"])
-        ) * 100.0
+    away_away_gf = _safe_div(away_stats["away_goals_for"], max(1, away_stats["away_matches"]))
+    away_away_ga = _safe_div(away_stats["away_goals_against"], max(1, away_stats["away_matches"]))
 
-        # Split home/away mai realist
-        home_home_points = _safe_div(
-            home_stats["home_wins"] * 3 + home_stats["home_draws"],
-            max(1, home_stats["home_matches"])
-        )
-        away_away_points = _safe_div(
-            away_stats["away_wins"] * 3 + away_stats["away_draws"],
-            max(1, away_stats["away_matches"])
-        )
+    home_form_ppg = _safe_div(home_stats["form_last5_points"], 5.0)
+    away_form_ppg = _safe_div(away_stats["form_last5_points"], 5.0)
 
-        home_home_gf_avg = _safe_div(
-            home_stats["home_goals_for"],
-            max(1, home_stats["home_matches"])
-        )
-        home_home_ga_avg = _safe_div(
-            home_stats["home_goals_against"],
-            max(1, home_stats["home_matches"])
-        )
+    home_attack_strength = _safe_div(home_home_gf, avg_home_goals)
+    away_attack_strength = _safe_div(away_away_gf, avg_away_goals)
 
-        away_away_gf_avg = _safe_div(
-            away_stats["away_goals_for"],
-            max(1, away_stats["away_matches"])
-        )
-        away_away_ga_avg = _safe_div(
-            away_stats["away_goals_against"],
-            max(1, away_stats["away_matches"])
-        )
+    home_defense_weakness = _safe_div(home_home_ga, avg_away_goals)
+    away_defense_weakness = _safe_div(away_away_ga, avg_home_goals)
 
-        # Scor compozit
-        home_attack = (
-            home_goals_for_avg * 18.0 +
-            home_home_gf_avg * 18.0 +
-            home_points_per_match * 10.0 +
-            home_home_points * 10.0 +
-            home_form_score * 0.30
-        )
+    form_home_mult = 1.0 + ((home_form_ppg - 1.5) * 0.08)
+    form_away_mult = 1.0 + ((away_form_ppg - 1.5) * 0.08)
 
-        away_attack = (
-            away_goals_for_avg * 18.0 +
-            away_away_gf_avg * 18.0 +
-            away_points_per_match * 10.0 +
-            away_away_points * 10.0 +
-            away_form_score * 0.30
-        )
+    form_home_mult = _clamp(form_home_mult, 0.82, 1.18)
+    form_away_mult = _clamp(form_away_mult, 0.82, 1.18)
 
-        # Cu cât primește mai puține goluri, cu atât e mai bun defensiv
-        home_def = (
-            100.0
-            - home_goals_against_avg * 14.0
-            - home_home_ga_avg * 10.0
-        )
-        away_def = (
-            100.0
-            - away_goals_against_avg * 14.0
-            - away_away_ga_avg * 10.0
-        )
+    home_xg = avg_home_goals * home_attack_strength * away_defense_weakness * form_home_mult
+    away_xg = avg_away_goals * away_attack_strength * home_defense_weakness * form_away_mult
 
-        home_score = home_attack + away_def + 10.0  # mic avantaj gazde
-        away_score = away_attack + home_def
+    home_xg *= 1.06
 
-        draw_raw = 24.0 + (4.0 - abs(home_points_per_match - away_points_per_match) * 2.5)
-        draw_raw = _clamp(draw_raw, 18.0, 30.0)
+    home_xg = _clamp(home_xg, 0.20, 3.80)
+    away_xg = _clamp(away_xg, 0.15, 3.40)
 
-        p1, px, p2 = _normalize_three(
-            _clamp(home_score, 20.0, 140.0),
-            draw_raw,
-            _clamp(away_score, 20.0, 140.0),
-        )
-        p1, px, p2 = _round1(p1), _round1(px), _round1(p2)
+    p_home = 0.0
+    p_draw = 0.0
+    p_away = 0.0
+    p_over25 = 0.0
+    p_under25 = 0.0
+    p_btts_yes = 0.0
+    p_btts_no = 0.0
 
-        gg_yes = _clamp((home_btts_rate + away_btts_rate) / 2.0, 25.0, 85.0)
-        gg_no = _round1(100.0 - gg_yes)
+    correct_scores_all: List[Dict[str, Any]] = []
 
-        over25 = _clamp((home_over25_rate + away_over25_rate) / 2.0, 25.0, 85.0)
-        under25 = _round1(100.0 - over25)
+    for hg in range(0, 6):
+        for ag in range(0, 6):
+            prob = _poisson_pmf(hg, home_xg) * _poisson_pmf(ag, away_xg)
+            correct_scores_all.append({
+                "home_goals": hg,
+                "away_goals": ag,
+                "probability": prob,
+            })
 
-    else:
-        # fallback rule-based dacă nu există team_stats
-        home_len = len(home_name)
-        away_len = len(away_name)
-        league_len = len(league_name or "")
+            if hg > ag:
+                p_home += prob
+            elif hg == ag:
+                p_draw += prob
+            else:
+                p_away += prob
 
-        home_adv = 8.0
-        team_name_edge = (home_len - away_len) * 0.9
-        league_bias = (league_len % 7) - 3
+            if hg + ag > 2:
+                p_over25 += prob
+            else:
+                p_under25 += prob
 
-        home_strength = 50.0 + home_adv + team_name_edge + league_bias
-        away_strength = 50.0 - home_adv - team_name_edge - league_bias
+            if hg > 0 and ag > 0:
+                p_btts_yes += prob
+            else:
+                p_btts_no += prob
 
-        draw_base = 26.0 - abs(team_name_edge) * 0.35
-        draw_base = _clamp(draw_base, 18.0, 30.0)
+    p1 = _round1(p_home * 100.0)
+    px = _round1(p_draw * 100.0)
+    p2 = _round1(p_away * 100.0)
 
-        home_raw = _clamp(home_strength, 20.0, 75.0)
-        away_raw = _clamp(away_strength, 15.0, 70.0)
-        draw_raw = draw_base
+    gg_yes = _round1(p_btts_yes * 100.0)
+    gg_no = _round1(p_btts_no * 100.0)
 
-        p1, px, p2 = _normalize_three(home_raw, draw_raw, away_raw)
-        p1, px, p2 = _round1(p1), _round1(px), _round1(p2)
-
-        attack_index = (home_len + away_len + league_len) % 20
-        gg_yes = _clamp(
-            47.0 + attack_index * 1.2 - abs(home_len - away_len) * 0.8,
-            35.0,
-            78.0,
-        )
-        gg_no = _round1(100.0 - gg_yes)
-
-        over25 = _clamp(
-            45.0 + attack_index * 1.4 - abs(home_len - away_len) * 0.5,
-            34.0,
-            80.0,
-        )
-        under25 = _round1(100.0 - over25)
+    over25 = _round1(p_over25 * 100.0)
+    under25 = _round1(p_under25 * 100.0)
 
     x1 = _round1(p1 + px)
     x2 = _round1(px + p2)
     _12 = _round1(p1 + p2)
 
-    ht_home = _clamp(p1 * 0.72, 20.0, 65.0)
-    ht_draw = _clamp(100.0 - ht_home - (p2 * 0.58), 18.0, 50.0)
-    ht_away = _round1(100.0 - ht_home - ht_draw)
-    ht_home = _round1(ht_home)
-    ht_draw = _round1(ht_draw)
+    ht_home_xg = home_xg * 0.46
+    ht_away_xg = away_xg * 0.46
 
-    fair_1 = _round1(100.0 / p1) if p1 > 0 else None
-    fair_x = _round1(100.0 / px) if px > 0 else None
-    fair_2 = _round1(100.0 / p2) if p2 > 0 else None
-    fair_gg = _round1(100.0 / gg_yes) if gg_yes > 0 else None
-    fair_o25 = _round1(100.0 / over25) if over25 > 0 else None
+    ht_1 = 0.0
+    ht_x = 0.0
+    ht_2 = 0.0
+
+    for hg in range(0, 5):
+        for ag in range(0, 5):
+            prob = _poisson_pmf(hg, ht_home_xg) * _poisson_pmf(ag, ht_away_xg)
+            if hg > ag:
+                ht_1 += prob
+            elif hg == ag:
+                ht_x += prob
+            else:
+                ht_2 += prob
+
+    ht_1 = _round1(ht_1 * 100.0)
+    ht_x = _round1(ht_x * 100.0)
+    ht_2 = _round1(ht_2 * 100.0)
+
+    fair_1 = _round2(100.0 / p1) if p1 > 0 else None
+    fair_x = _round2(100.0 / px) if px > 0 else None
+    fair_2 = _round2(100.0 / p2) if p2 > 0 else None
+    fair_gg = _round2(100.0 / gg_yes) if gg_yes > 0 else None
+    fair_o25 = _round2(100.0 / over25) if over25 > 0 else None
+
+    correct_scores_all.sort(key=lambda x: x["probability"], reverse=True)
+    correct_scores = [
+        {
+            "score": f"{s['home_goals']}-{s['away_goals']}",
+            "home_goals": s["home_goals"],
+            "away_goals": s["away_goals"],
+            "probability": _round1(s["probability"] * 100.0),
+        }
+        for s in correct_scores_all[:4]
+    ]
 
     market_scores = {
         "1": p1,
         "X": px,
         "2": p2,
-        "GG": _round1(gg_yes),
-        "NO_GG": _round1(gg_no),
-        "OVER_2_5": _round1(over25),
-        "UNDER_2_5": _round1(under25),
+        "GG": gg_yes,
+        "NO_GG": gg_no,
+        "OVER_2_5": over25,
+        "UNDER_2_5": under25,
         "1X": x1,
         "X2": x2,
         "12": _12,
@@ -359,6 +493,13 @@ def _build_prediction_from_fixture_row(row: tuple) -> Dict[str, Any]:
             "name": away_name,
             "short": away_short,
         },
+        "model": {
+            "type": "poisson",
+            "home_xg": _round2(home_xg),
+            "away_xg": _round2(away_xg),
+            "avg_home_goals_league": _round2(avg_home_goals),
+            "avg_away_goals_league": _round2(avg_away_goals),
+        },
         "markets": {
             "1x2": {
                 "1": p1,
@@ -376,24 +517,25 @@ def _build_prediction_from_fixture_row(row: tuple) -> Dict[str, Any]:
                 "12": _12,
             },
             "btts": {
-                "GG": _round1(gg_yes),
-                "NO_GG": _round1(gg_no),
+                "GG": gg_yes,
+                "NO_GG": gg_no,
                 "fair_odds": {
                     "GG": fair_gg,
                 },
             },
             "ou_2_5": {
-                "OVER_2_5": _round1(over25),
-                "UNDER_2_5": _round1(under25),
+                "OVER_2_5": over25,
+                "UNDER_2_5": under25,
                 "fair_odds": {
                     "OVER_2_5": fair_o25,
                 },
             },
             "ht_1x2": {
-                "1": ht_home,
-                "X": ht_draw,
-                "2": ht_away,
+                "1": ht_1,
+                "X": ht_x,
+                "2": ht_2,
             },
+            "correct_score_top": correct_scores,
         },
         "top_pick": {
             "market": best_market,
@@ -401,13 +543,13 @@ def _build_prediction_from_fixture_row(row: tuple) -> Dict[str, Any]:
         },
         "analysis": {
             "summary": (
-                f"{home_name} vs {away_name}: top pick {best_market} "
-                f"cu încredere {best_confidence}%."
+                f"{home_name} vs {away_name}: model Poisson estimează "
+                f"xG {home_name}={_round2(home_xg)}, {away_name}={_round2(away_xg)}."
             ),
             "notes": [
-                "Predicția folosește team_stats dacă există.",
-                "Sunt incluse forma recentă, goluri marcate/primite și profil BTTS/O2.5.",
-                "Dacă lipsesc statisticile, se folosește fallback rule-based.",
+                "Modelul folosește team_stats + home/away split + formă recentă.",
+                "Scorurile corecte sunt estimate din distribuția Poisson 0-5 goluri.",
+                "Probabilitățile 1X2, GG și O2.5 sunt derivate din matricea scorurilor.",
             ],
         },
     }

@@ -64,12 +64,24 @@ class PredictionItem {
       seasonId: json['season_id']?.toString() ?? '',
       leagueName: json['league_name']?.toString() ?? '',
       leagueCountry: json['league_country']?.toString() ?? '',
-      homeTeam: TeamInfo.fromJson((json['home_team'] as Map?)?.cast<String, dynamic>() ?? {}),
-      awayTeam: TeamInfo.fromJson((json['away_team'] as Map?)?.cast<String, dynamic>() ?? {}),
-      model: PredictionModel.fromJson((json['model'] as Map?)?.cast<String, dynamic>() ?? {}),
-      markets: PredictionMarkets.fromJson((json['markets'] as Map?)?.cast<String, dynamic>() ?? {}),
-      topPick: TopPick.fromJson((json['top_pick'] as Map?)?.cast<String, dynamic>() ?? {}),
-      analysis: PredictionAnalysis.fromJson((json['analysis'] as Map?)?.cast<String, dynamic>() ?? {}),
+      homeTeam: TeamInfo.fromJson(
+        (json['home_team'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
+      awayTeam: TeamInfo.fromJson(
+        (json['away_team'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
+      model: PredictionModel.fromJson(
+        (json['model'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
+      markets: PredictionMarkets.fromJson(
+        (json['markets'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
+      topPick: TopPick.fromJson(
+        (json['top_pick'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
+      analysis: PredictionAnalysis.fromJson(
+        (json['analysis'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
     );
   }
 }
@@ -116,17 +128,17 @@ class PredictionModel {
   });
 
   factory PredictionModel.fromJson(Map<String, dynamic> json) {
-    double num(dynamic v) => v is num ? v.toDouble() : 0.0;
+    double toDoubleValue(dynamic v) => v is num ? v.toDouble() : 0.0;
 
     return PredictionModel(
       type: json['type']?.toString() ?? '',
-      homeXg: num(json['home_xg']),
-      awayXg: num(json['away_xg']),
-      avgHomeGoalsLeague: num(json['avg_home_goals_league']),
-      avgAwayGoalsLeague: num(json['avg_away_goals_league']),
-      homeElo: num(json['home_elo']),
-      awayElo: num(json['away_elo']),
-      eloDiff: num(json['elo_diff']),
+      homeXg: toDoubleValue(json['home_xg']),
+      awayXg: toDoubleValue(json['away_xg']),
+      avgHomeGoalsLeague: toDoubleValue(json['avg_home_goals_league']),
+      avgAwayGoalsLeague: toDoubleValue(json['avg_away_goals_league']),
+      homeElo: toDoubleValue(json['home_elo']),
+      awayElo: toDoubleValue(json['away_elo']),
+      eloDiff: toDoubleValue(json['elo_diff']),
     );
   }
 }
@@ -150,12 +162,23 @@ class PredictionMarkets {
 
   factory PredictionMarkets.fromJson(Map<String, dynamic> json) {
     final rawScores = (json['correct_score_top'] as List?) ?? [];
+
     return PredictionMarkets(
-      oneXTwo: Market1X2.fromJson((json['1x2'] as Map?)?.cast<String, dynamic>() ?? {}),
-      doubleChance: DoubleChanceMarket.fromJson((json['double_chance'] as Map?)?.cast<String, dynamic>() ?? {}),
-      btts: BttsMarket.fromJson((json['btts'] as Map?)?.cast<String, dynamic>() ?? {}),
-      ou25: Ou25Market.fromJson((json['ou_2_5'] as Map?)?.cast<String, dynamic>() ?? {}),
-      ht1x2: Ht1X2Market.fromJson((json['ht_1x2'] as Map?)?.cast<String, dynamic>() ?? {}),
+      oneXTwo: Market1X2.fromJson(
+        (json['1x2'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
+      doubleChance: DoubleChanceMarket.fromJson(
+        (json['double_chance'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
+      btts: BttsMarket.fromJson(
+        (json['btts'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
+      ou25: Ou25Market.fromJson(
+        (json['ou_2_5'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
+      ht1x2: Ht1X2Market.fromJson(
+        (json['ht_1x2'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
       correctScoreTop: rawScores
           .map((e) => CorrectScore.fromJson(e as Map<String, dynamic>))
           .toList(),
@@ -177,13 +200,15 @@ class Market1X2 {
   });
 
   factory Market1X2.fromJson(Map<String, dynamic> json) {
-    double num(dynamic v) => v is num ? v.toDouble() : 0.0;
+    double toDoubleValue(dynamic v) => v is num ? v.toDouble() : 0.0;
 
     return Market1X2(
-      home: num(json['1']),
-      draw: num(json['X']),
-      away: num(json['2']),
-      fairOdds: FairOdds1X2.fromJson((json['fair_odds'] as Map?)?.cast<String, dynamic>() ?? {}),
+      home: toDoubleValue(json['1']),
+      draw: toDoubleValue(json['X']),
+      away: toDoubleValue(json['2']),
+      fairOdds: FairOdds1X2.fromJson(
+        (json['fair_odds'] as Map?)?.cast<String, dynamic>() ?? {},
+      ),
     );
   }
 }
@@ -200,12 +225,12 @@ class FairOdds1X2 {
   });
 
   factory FairOdds1X2.fromJson(Map<String, dynamic> json) {
-    double? numOrNull(dynamic v) => v is num ? v.toDouble() : null;
+    double? toDoubleOrNull(dynamic v) => v is num ? v.toDouble() : null;
 
     return FairOdds1X2(
-      home: numOrNull(json['1']),
-      draw: numOrNull(json['X']),
-      away: numOrNull(json['2']),
+      home: toDoubleOrNull(json['1']),
+      draw: toDoubleOrNull(json['X']),
+      away: toDoubleOrNull(json['2']),
     );
   }
 }
@@ -222,12 +247,12 @@ class DoubleChanceMarket {
   });
 
   factory DoubleChanceMarket.fromJson(Map<String, dynamic> json) {
-    double num(dynamic v) => v is num ? v.toDouble() : 0.0;
+    double toDoubleValue(dynamic v) => v is num ? v.toDouble() : 0.0;
 
     return DoubleChanceMarket(
-      oneX: num(json['1X']),
-      xTwo: num(json['X2']),
-      oneTwo: num(json['12']),
+      oneX: toDoubleValue(json['1X']),
+      xTwo: toDoubleValue(json['X2']),
+      oneTwo: toDoubleValue(json['12']),
     );
   }
 }
@@ -244,14 +269,15 @@ class BttsMarket {
   });
 
   factory BttsMarket.fromJson(Map<String, dynamic> json) {
-    double num(dynamic v) => v is num ? v.toDouble() : 0.0;
-    double? numOrNull(dynamic v) => v is num ? v.toDouble() : null;
+    double toDoubleValue(dynamic v) => v is num ? v.toDouble() : 0.0;
+    double? toDoubleOrNull(dynamic v) => v is num ? v.toDouble() : null;
+
     final fair = (json['fair_odds'] as Map?)?.cast<String, dynamic>() ?? {};
 
     return BttsMarket(
-      gg: num(json['GG']),
-      noGg: num(json['NO_GG']),
-      fairGg: numOrNull(fair['GG']),
+      gg: toDoubleValue(json['GG']),
+      noGg: toDoubleValue(json['NO_GG']),
+      fairGg: toDoubleOrNull(fair['GG']),
     );
   }
 }
@@ -268,14 +294,15 @@ class Ou25Market {
   });
 
   factory Ou25Market.fromJson(Map<String, dynamic> json) {
-    double num(dynamic v) => v is num ? v.toDouble() : 0.0;
-    double? numOrNull(dynamic v) => v is num ? v.toDouble() : null;
+    double toDoubleValue(dynamic v) => v is num ? v.toDouble() : 0.0;
+    double? toDoubleOrNull(dynamic v) => v is num ? v.toDouble() : null;
+
     final fair = (json['fair_odds'] as Map?)?.cast<String, dynamic>() ?? {};
 
     return Ou25Market(
-      over25: num(json['OVER_2_5']),
-      under25: num(json['UNDER_2_5']),
-      fairOver25: numOrNull(fair['OVER_2_5']),
+      over25: toDoubleValue(json['OVER_2_5']),
+      under25: toDoubleValue(json['UNDER_2_5']),
+      fairOver25: toDoubleOrNull(fair['OVER_2_5']),
     );
   }
 }
@@ -292,12 +319,12 @@ class Ht1X2Market {
   });
 
   factory Ht1X2Market.fromJson(Map<String, dynamic> json) {
-    double num(dynamic v) => v is num ? v.toDouble() : 0.0;
+    double toDoubleValue(dynamic v) => v is num ? v.toDouble() : 0.0;
 
     return Ht1X2Market(
-      home: num(json['1']),
-      draw: num(json['X']),
-      away: num(json['2']),
+      home: toDoubleValue(json['1']),
+      draw: toDoubleValue(json['X']),
+      away: toDoubleValue(json['2']),
     );
   }
 }
@@ -314,7 +341,8 @@ class CorrectScore {
   factory CorrectScore.fromJson(Map<String, dynamic> json) {
     return CorrectScore(
       score: json['score']?.toString() ?? '',
-      probability: json['probability'] is num ? (json['probability'] as num).toDouble() : 0.0,
+      probability:
+          json['probability'] is num ? (json['probability'] as num).toDouble() : 0.0,
     );
   }
 }
@@ -331,7 +359,8 @@ class TopPick {
   factory TopPick.fromJson(Map<String, dynamic> json) {
     return TopPick(
       market: json['market']?.toString() ?? '',
-      confidence: json['confidence'] is num ? (json['confidence'] as num).toDouble() : 0.0,
+      confidence:
+          json['confidence'] is num ? (json['confidence'] as num).toDouble() : 0.0,
     );
   }
 }

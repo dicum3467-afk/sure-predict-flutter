@@ -1,45 +1,37 @@
-from __future__ import annotations
-
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import api_router
+from app.routes import fixtures
+from app.routes import predictions
 
 app = FastAPI(
     title="Sure Predict Backend",
-    version=os.getenv("APP_VERSION", "1.0.0"),
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    version="1.0.0"
 )
 
-cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
-cors_origins = [o.strip() for o in cors_origins if o.strip()] or ["*"]
-
+# CORS pentru Flutter / Browser / Swagger
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(api_router)
+# Routes
+app.include_router(fixtures.router)
+app.include_router(predictions.router)
 
 
-@app.get("/", tags=["Meta"])
+@app.get("/")
 def root():
     return {
-        "ok": True,
-        "service": "sure-predict-backend",
-        "version": app.version,
+        "message": "Sure Predict Backend running"
     }
 
 
-@app.get("/health", tags=["Meta"])
+@app.get("/health")
 def health():
     return {
-        "ok": True,
-        "status": "healthy",
+        "status": "ok"
     }

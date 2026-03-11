@@ -3,12 +3,15 @@ from app.utils.job_logger import log_job
 
 
 def run():
-    job_name = "rebuild_team_stats"
+
+    job = "rebuild_team_stats"
+
     try:
         rebuild_team_stats()
-        log_job(job_name, "success", "team_stats rebuilt")
+        log_job(job, "success", "team_stats rebuilt")
+
     except Exception as e:
-        log_job(job_name, "failed", str(e))
+        log_job(job, "failed", str(e))
         raise
 
 

@@ -1,63 +1,80 @@
-from app.services.football_api import get_fixtures
-from app.utils.job_logger import log_job
-from app.utils.dates import days_from_today
+from __future__ import annotations
+
 from app.db import get_conn
+from app.services.football_api import get_fixtures
+from app.utils.dates import days_from_today
+from app.utils.job_logger import log_job
 
 
-def fetch_active_leagues():
+def _fetch_active_leagues():
     sql = """
-        select id, provider_league_id
+        select provider_league_id
         from leagues
-        where is_active = true
+        where coalesce(is_active, true) = true
+        and provider_league_id is not null
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
-            return cur.fetchall()
+            return [r[0] for r in cur.fetchall()]
 
 
 def run(season: int = 2026):
     job_name = "sync_results"
+
     try:
-        leagues = fetch_active_leagues()
+        leagues = _fetch_active_leagues()
         from_date = days_from_today(-7)
         to_date = days_from_today(1)
 
-        update_sql = """
-            update fixtures
-            set
-                status = %s,
-                home_goals = %s,
-                away_goals = %s
-            where provider_fixture_id = %s
-        """
-
-        count = 0
+        updated = 0
 
         with get_conn() as conn:
             with conn.cursor() as cur:
-                for _, provider_league_id in leagues:
-                    payload = get_fixtures(provider_league_id, season, from_date, to_date)
-                    rows = payload.get("response", [])
+                for provider_league_id in leagues:
+                    payload = get_fixtures(
+                        str(provider_league_id),
+                        season,
+                        from_date,
+                        to_date,
+                    )
+
+                    rows = payload.get("response", []) or []
 
                     for item in rows:
-                        fixture = item.get("fixture", {})
-                        goals = item.get("goals", {})
+                        fixture = item.get("fixture", {}) or {}
+                        goals = item.get("goals", {}) or {}
+
+                        provider_fixture_id = fixture.get("id")
+                        status = (fixture.get("status", {}) or {}).get("short", "NS")
+                        home_goals = goals.get("home")
+                        away_goals = goals.get("away")
+
+                        if not provider_fixture_id:
+                            continue
 
                         cur.execute(
-                            update_sql,
+                            """
+                            update fixtures
+                            set
+                                status = %s,
+                                home_goals = %s,
+                                away_goals = %s
+                            where provider_fixture_id = %s
+                            """,
                             (
-                                fixture.get("status", {}).get("short", "NS"),
-                                goals.get("home"),
-                                goals.get("away"),
-                                str(fixture.get("id")),
+                                status,
+                                home_goals,
+                                away_goals,
+                                str(provider_fixture_id),
                             ),
                         )
-                        count += 1
+                        updated += 1
 
             conn.commit()
 
-        log_job(job_name, "success", f"Updated {count} fixture results")
+        log_job(job_name, "success", f"Updated {updated} fixture results")
+
     except Exception as e:
         log_job(job_name, "failed", str(e))
         raise

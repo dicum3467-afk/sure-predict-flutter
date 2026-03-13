@@ -349,13 +349,13 @@ def _fallback_prediction(
             if hg > 0 and ag > 0:
                 p_btts += prob
 
-    p1 = _round1(p_home * 100)
-    px = _round1(p_draw * 100)
-    p2 = _round1(p_away * 100)
-    gg = _round1(p_btts * 100)
-    no_gg = _round1(100 - gg)
-    over25 = _round1(p_over25 * 100)
-    under25 = _round1(100 - over25)
+    p1 = _round1(p_home * 100.0)
+    px = _round1(p_draw * 100.0)
+    p2 = _round1(p_away * 100.0)
+    gg = _round1(p_btts * 100.0)
+    no_gg = _round1(100.0 - gg)
+    over25 = _round1(p_over25 * 100.0)
+    under25 = _round1(100.0 - over25)
     x1 = _round1(p1 + px)
     x2 = _round1(px + p2)
     _12 = _round1(p1 + p2)
@@ -497,21 +497,18 @@ def _build_prediction_from_fixture_row(row: tuple) -> Dict[str, Any]:
     total_home_matches = max(1, home_stats["matches_played"])
     total_away_matches = max(1, away_stats["matches_played"])
 
-    # Home/Away attack-defense
     home_home_gf = _safe_div(home_stats["home_goals_for"], home_matches)
     home_home_ga = _safe_div(home_stats["home_goals_against"], home_matches)
 
     away_away_gf = _safe_div(away_stats["away_goals_for"], away_matches)
     away_away_ga = _safe_div(away_stats["away_goals_against"], away_matches)
 
-    # Overall attack-defense
     home_overall_gf = _safe_div(home_stats["goals_for"], total_home_matches)
     home_overall_ga = _safe_div(home_stats["goals_against"], total_home_matches)
 
     away_overall_gf = _safe_div(away_stats["goals_for"], total_away_matches)
     away_overall_ga = _safe_div(away_stats["goals_against"], total_away_matches)
 
-    # Form
     home_form_ppg = _safe_div(home_stats["form_last5_points"], 5.0)
     away_form_ppg = _safe_div(away_stats["form_last5_points"], 5.0)
 
@@ -521,40 +518,31 @@ def _build_prediction_from_fixture_row(row: tuple) -> Dict[str, Any]:
     away_form_gf = _safe_div(away_stats["form_last5_goals_for"], 5.0)
     away_form_ga = _safe_div(away_stats["form_last5_goals_against"], 5.0)
 
-    # Strength factors
     home_attack_strength = _safe_div((home_home_gf * 0.65) + (home_overall_gf * 0.35), avg_home_goals)
     away_attack_strength = _safe_div((away_away_gf * 0.65) + (away_overall_gf * 0.35), avg_away_goals)
 
     away_defense_weakness = _safe_div((away_away_ga * 0.65) + (away_overall_ga * 0.35), avg_home_goals)
     home_defense_weakness = _safe_div((home_home_ga * 0.65) + (home_overall_ga * 0.35), avg_away_goals)
 
-    # Recent form multipliers
     home_form_mult = 1.0 + ((home_form_ppg - 1.5) * 0.10)
     away_form_mult = 1.0 + ((away_form_ppg - 1.5) * 0.10)
-
     home_form_mult = _clamp(home_form_mult, 0.82, 1.22)
     away_form_mult = _clamp(away_form_mult, 0.82, 1.22)
 
-    # Goal trend multipliers
     home_goal_trend_mult = 1.0 + ((home_form_gf - home_overall_gf) * 0.07)
     away_goal_trend_mult = 1.0 + ((away_form_gf - away_overall_gf) * 0.07)
-
     home_goal_trend_mult = _clamp(home_goal_trend_mult, 0.90, 1.12)
     away_goal_trend_mult = _clamp(away_goal_trend_mult, 0.90, 1.12)
 
-    # Defensive trend
     home_def_trend_mult = 1.0 + ((home_form_ga - home_overall_ga) * 0.06)
     away_def_trend_mult = 1.0 + ((away_form_ga - away_overall_ga) * 0.06)
-
     home_def_trend_mult = _clamp(home_def_trend_mult, 0.90, 1.12)
     away_def_trend_mult = _clamp(away_def_trend_mult, 0.90, 1.12)
 
-    # ELO influence
     elo_diff = home_elo - away_elo
     elo_factor_home = _clamp(1.0 + (elo_diff / 4000.0), 0.86, 1.16)
     elo_factor_away = _clamp(1.0 - (elo_diff / 4000.0), 0.86, 1.16)
 
-    # BTTS / Over rates
     home_btts_rate = _safe_div(home_stats["btts_hits"], total_home_matches)
     away_btts_rate = _safe_div(away_stats["btts_hits"], total_away_matches)
     home_over25_rate = _safe_div(home_stats["over25_hits"], total_home_matches)
@@ -562,16 +550,13 @@ def _build_prediction_from_fixture_row(row: tuple) -> Dict[str, Any]:
 
     btts_mult = 1.0 + ((((home_btts_rate + away_btts_rate) / 2.0) - 0.5) * 0.10)
     over25_mult = 1.0 + ((((home_over25_rate + away_over25_rate) / 2.0) - 0.5) * 0.18)
-
     btts_mult = _clamp(btts_mult, 0.94, 1.08)
     over25_mult = _clamp(over25_mult, 0.90, 1.14)
 
-    # Base xG
     home_xg = avg_home_goals * home_attack_strength * away_defense_weakness
     away_xg = avg_away_goals * away_attack_strength * home_defense_weakness
 
-    # Adjustments
-    home_xg *= 1.06  # home advantage
+    home_xg *= 1.06
     home_xg *= home_form_mult
     away_xg *= away_form_mult
 
@@ -593,7 +578,6 @@ def _build_prediction_from_fixture_row(row: tuple) -> Dict[str, Any]:
     home_xg = _clamp(home_xg, 0.20, 3.90)
     away_xg = _clamp(away_xg, 0.15, 3.60)
 
-    # Poisson matrix
     p_home = 0.0
     p_draw = 0.0
     p_away = 0.0
@@ -814,7 +798,6 @@ def list_top_predictions(limit: int = 20) -> Dict[str, Any]:
 
     rows = _fetch_fixture_rows(limit=200)
     items = _serialize_items(rows)
-
     items.sort(key=lambda x: x["top_pick"]["confidence"], reverse=True)
     items = items[:limit]
 

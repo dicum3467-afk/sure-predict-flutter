@@ -8,10 +8,8 @@ class FixtureUiModel {
   final int? season;
   final String leagueName;
   final String leagueCountry;
-
   final TeamUiModel homeTeam;
   final TeamUiModel awayTeam;
-
   final PredictionModelUi? model;
 
   FixtureUiModel({
@@ -120,14 +118,14 @@ class PredictionProbsUi {
 
   factory PredictionProbsUi.fromJson(Map<String, dynamic> json) {
     final oneX2 = Map<String, dynamic>.from((json['1x2'] ?? {}) as Map);
-    final gg = Map<String, dynamic>.from((json['gg'] ?? {}) as Map);
+    final ggMap = Map<String, dynamic>.from((json['gg'] ?? {}) as Map);
     final ou25 = Map<String, dynamic>.from((json['ou25'] ?? {}) as Map);
 
     return PredictionProbsUi(
       home: _asDouble(oneX2['1']),
       draw: _asDouble(oneX2['X']),
       away: _asDouble(oneX2['2']),
-      gg: _asDouble(gg['GG']),
+      gg: _asDouble(ggMap['GG']),
       over25: _asDouble(ou25['O2.5']),
     );
   }
@@ -139,7 +137,12 @@ class TopPickUiModel {
   final String homeTeam;
   final String awayTeam;
   final String market;
-  final double probability;
+  final String selection;
+  final double odd;
+  final double impliedProbability;
+  final double modelProbability;
+  final double edge;
+  final double expectedValue;
   final double? fairOdd;
 
   TopPickUiModel({
@@ -148,21 +151,29 @@ class TopPickUiModel {
     required this.homeTeam,
     required this.awayTeam,
     required this.market,
-    required this.probability,
-    this.fairOdd,
+    required this.selection,
+    required this.odd,
+    required this.impliedProbability,
+    required this.modelProbability,
+    required this.edge,
+    required this.expectedValue,
+    required this.fairOdd,
   });
 
   factory TopPickUiModel.fromJson(Map<String, dynamic> json) {
     return TopPickUiModel(
-      fixtureId: json['fixture_id'] ?? '',
-      leagueName: json['league_name'] ?? '',
-      homeTeam: json['home_team'] ?? '',
-      awayTeam: json['away_team'] ?? '',
-      market: json['market'] ?? '',
-      probability: (json['probability'] ?? 0).toDouble(),
-      fairOdd: json['fair_odd'] != null
-          ? (json['fair_odd'] as num).toDouble()
-          : null,
+      fixtureId: (json['fixture_id'] ?? '').toString(),
+      leagueName: (json['league_name'] ?? '').toString(),
+      homeTeam: (json['home_team'] ?? '').toString(),
+      awayTeam: (json['away_team'] ?? '').toString(),
+      market: (json['market'] ?? '').toString(),
+      selection: (json['selection'] ?? '').toString(),
+      odd: _asDouble(json['odd']),
+      impliedProbability: _asDouble(json['implied_probability']),
+      modelProbability: _asDouble(json['model_probability']),
+      edge: _asDouble(json['edge']),
+      expectedValue: _asDouble(json['expected_value']),
+      fairOdd: json['fair_odd'] == null ? null : _asDouble(json['fair_odd']),
     );
   }
 }
@@ -177,5 +188,6 @@ double _asDouble(dynamic v) {
   if (v == null) return 0.0;
   if (v is double) return v;
   if (v is int) return v.toDouble();
+  if (v is num) return v.toDouble();
   return double.tryParse(v.toString()) ?? 0.0;
 }

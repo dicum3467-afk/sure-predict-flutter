@@ -135,41 +135,34 @@ class PredictionProbsUi {
 
 class TopPickUiModel {
   final String fixtureId;
-  final String modelVersion;
-  final String bookmaker;
+  final String leagueName;
+  final String homeTeam;
+  final String awayTeam;
   final String market;
-  final String selection;
-  final double odd;
-  final double impliedProbability;
-  final double modelProbability;
-  final double edge;
-  final double expectedValue;
+  final double probability;
+  final double? fairOdd;
 
   TopPickUiModel({
     required this.fixtureId,
-    required this.modelVersion,
-    required this.bookmaker,
+    required this.leagueName,
+    required this.homeTeam,
+    required this.awayTeam,
     required this.market,
-    required this.selection,
-    required this.odd,
-    required this.impliedProbability,
-    required this.modelProbability,
-    required this.edge,
-    required this.expectedValue,
+    required this.probability,
+    this.fairOdd,
   });
 
   factory TopPickUiModel.fromJson(Map<String, dynamic> json) {
     return TopPickUiModel(
-      fixtureId: (json['fixture_id'] ?? '').toString(),
-      modelVersion: (json['model_version'] ?? '').toString(),
-      bookmaker: (json['bookmaker'] ?? '').toString(),
-      market: (json['market'] ?? '').toString(),
-      selection: (json['selection'] ?? '').toString(),
-      odd: _asDouble(json['odd']),
-      impliedProbability: _asDouble(json['implied_probability']),
-      modelProbability: _asDouble(json['model_probability']),
-      edge: _asDouble(json['edge']),
-      expectedValue: _asDouble(json['expected_value']),
+      fixtureId: json['fixture_id'] ?? '',
+      leagueName: json['league_name'] ?? '',
+      homeTeam: json['home_team'] ?? '',
+      awayTeam: json['away_team'] ?? '',
+      market: json['market'] ?? '',
+      probability: (json['probability'] ?? 0).toDouble(),
+      fairOdd: json['fair_odd'] != null
+          ? (json['fair_odd'] as num).toDouble()
+          : null,
     );
   }
 }

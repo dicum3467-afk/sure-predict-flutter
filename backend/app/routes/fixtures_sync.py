@@ -1,6 +1,8 @@
 from __future__ import annotations
 import os
 import logging 
+from dataclasses import dataclass
+import httpx 
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.core.queue import queue

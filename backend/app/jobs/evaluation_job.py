@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
 
-from app.db import supabase_client
+supabase_client = None
 from app.services.predictions_engine import MODEL_VERSION, compute_prediction_for_fixture
 from app.services.evaluation_metrics import (
     brier_binary, logloss_binary,

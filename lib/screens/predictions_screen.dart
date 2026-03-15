@@ -1,8 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
-
-import '../models/prediction_model.dart';
-import '../services/predictions_service.dart';
+import 'package:http/http.dart' as http;
 
 class PredictionsScreen extends StatefulWidget {
   const PredictionsScreen({super.key});
@@ -11,459 +9,367 @@ class PredictionsScreen extends StatefulWidget {
   State<PredictionsScreen> createState() => _PredictionsScreenState();
 }
 
-class _PredictionsScreenState extends State<PredictionsScreen> {
-  late Future<List<PredictionItem>> _future;
-  final _service = PredictionsService();
+class _PredictionsScreenState extends State<PredictionsScreen>
+    with SingleTickerProviderStateMixin {
+  static const String baseUrl = 'https://sure-predict-backend.onrender.com';
+
+  late TabController _tabController;
+
+  bool _loadingAll = false;
+  bool _loadingToday = false;
+  bool _loadingTop = false;
+
+  String? _errorAll;
+  String? _errorToday;
+  String? _errorTop;
+
+  List<dynamic> _allItems = [];
+  List<dynamic> _todayItems = [];
+  List<dynamic> _topItems = [];
 
   @override
   void initState() {
     super.initState();
-    _future = _service.fetchPredictions(limit: 50);
+    _tabController = TabController(length: 3, vsync: this);
+    _loadAll();
+    _loadToday();
+    _loadTop();
   }
 
-  Future<void> _reload() async {
+  Future<void> _loadAll() async {
     setState(() {
-      _future = _service.fetchPredictions(limit: 50);
+      _loadingAll = true;
+      _errorAll = null;
     });
-    await _future;
-  }
 
-  String _formatDate(String raw) {
     try {
-      final dt = DateTime.parse(raw).toLocal();
-      return DateFormat('dd.MM.yyyy HH:mm').format(dt);
-    } catch (_) {
-      return raw;
+      final uri = Uri.parse('$baseUrl/predictions?limit=50');
+      final res = await http.get(uri);
+
+      if (res.statusCode != 200) {
+        throw Exception('HTTP ${res.statusCode}: ${res.body}');
+      }
+
+      final data = jsonDecode(res.body);
+      setState(() {
+        _allItems = (data['items'] as List?) ?? [];
+      });
+    } catch (e) {
+      setState(() {
+        _errorAll = e.toString();
+      });
+    } finally {
+      setState(() {
+        _loadingAll = false;
+      });
     }
   }
 
-  Color _statusColor(String status) {
-    final s = status.toLowerCase();
-    if (s.contains('finished')) return Colors.green;
-    if (s.contains('live')) return Colors.redAccent;
-    if (s.contains('scheduled') || s.contains('ns')) return Colors.blue;
-    return Colors.grey;
+  Future<void> _loadToday() async {
+    setState(() {
+      _loadingToday = true;
+      _errorToday = null;
+    });
+
+    try {
+      final uri = Uri.parse('$baseUrl/predictions/today?limit=50');
+      final res = await http.get(uri);
+
+      if (res.statusCode != 200) {
+        throw Exception('HTTP ${res.statusCode}: ${res.body}');
+      }
+
+      final data = jsonDecode(res.body);
+      setState(() {
+        _todayItems = (data['items'] as List?) ?? [];
+      });
+    } catch (e) {
+      setState(() {
+        _errorToday = e.toString();
+      });
+    } finally {
+      setState(() {
+        _loadingToday = false;
+      });
+    }
   }
 
-  Widget _percentBox(String label, double value) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.white12),
-          borderRadius: BorderRadius.circular(18),
-        ),
+  Future<void> _loadTop() async {
+    setState(() {
+      _loadingTop = true;
+      _errorTop = null;
+    });
+
+    try {
+      final uri = Uri.parse('$baseUrl/predictions/top?limit=20');
+      final res = await http.get(uri);
+
+      if (res.statusCode != 200) {
+        throw Exception('HTTP ${res.statusCode}: ${res.body}');
+      }
+
+      final data = jsonDecode(res.body);
+      setState(() {
+        _topItems = (data['items'] as List?) ?? [];
+      });
+    } catch (e) {
+      setState(() {
+        _errorTop = e.toString();
+      });
+    } finally {
+      setState(() {
+        _loadingTop = false;
+      });
+    }
+  }
+
+  String _formatDate(String? iso) {
+    if (iso == null || iso.isEmpty) return '-';
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      final dd = dt.day.toString().padLeft(2, '0');
+      final mm = dt.month.toString().padLeft(2, '0');
+      final yy = dt.year.toString();
+      final hh = dt.hour.toString().padLeft(2, '0');
+      final min = dt.minute.toString().padLeft(2, '0');
+      return '$dd.$mm.$yy  $hh:$min';
+    } catch (_) {
+      return iso;
+    }
+  }
+
+  String _predictionText(Map<String, dynamic> item) {
+    final model = item['model'];
+    if (model is Map<String, dynamic>) {
+      final topPick = model['top_pick'];
+      if (topPick is Map<String, dynamic>) {
+        final market = topPick['market']?.toString() ?? '';
+        final pick = topPick['pick']?.toString() ?? '';
+        if (market.isNotEmpty || pick.isNotEmpty) {
+          return '$market $pick'.trim();
+        }
+      }
+
+      final summary = model['summary']?.toString();
+      if (summary != null && summary.isNotEmpty) return summary;
+    }
+
+    final prediction = item['prediction'];
+    if (prediction is Map<String, dynamic>) {
+      final summary = prediction['summary']?.toString();
+      if (summary != null && summary.isNotEmpty) return summary;
+    }
+
+    return 'No prediction summary';
+  }
+
+  double? _confidenceValue(Map<String, dynamic> item) {
+    final confidence = item['confidence'];
+    if (confidence is num) return confidence.toDouble();
+
+    final model = item['model'];
+    if (model is Map<String, dynamic>) {
+      final c = model['confidence'];
+      if (c is num) return c.toDouble();
+    }
+
+    final prediction = item['prediction'];
+    if (prediction is Map<String, dynamic>) {
+      final c = prediction['confidence'];
+      if (c is num) return c.toDouble();
+    }
+
+    return null;
+  }
+
+  Widget _buildPredictionCard(Map<String, dynamic> item) {
+    final homeTeam = (item['home_team']?['name'] ?? item['fixture']?['home_team_name'] ?? 'Home').toString();
+    final awayTeam = (item['away_team']?['name'] ?? item['fixture']?['away_team_name'] ?? 'Away').toString();
+
+    final kickoffAt = item['kickoff_at']?.toString() ??
+        item['fixture']?['kickoff_at']?.toString();
+
+    final leagueName = item['league_name']?.toString() ??
+        item['fixture']?['league_name']?.toString() ??
+        '-';
+
+    final confidence = _confidenceValue(item);
+    final predictionText = _predictionText(item);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              label,
+              '$homeTeam vs $awayTeam',
               style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 18,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              leagueName,
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _formatDate(kickoffAt),
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 13,
               ),
             ),
             const SizedBox(height: 10),
             Text(
-              '${value.toStringAsFixed(1)}%',
+              predictionText,
               style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _smallMarketBox(String label, double value) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.white12),
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 16,
-                ),
-              ),
-            ),
-            Text(
-              '${value.toStringAsFixed(1)}%',
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCorrectScores(List<CorrectScore> scores) {
-    if (scores.isEmpty) return const SizedBox.shrink();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Correct Score',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: scores
-              .map(
-                (s) => Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.04),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Text(
-                    '${s.score} • ${s.probability.toStringAsFixed(1)}%',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-              )
-              .toList(),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildPredictionCard(PredictionItem item) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 18),
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF151A22),
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: Colors.white10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            item.leagueName,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 20,
-            ),
-          ),
-          if (item.round != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              item.round.toString(),
-              style: const TextStyle(color: Colors.white38),
-            ),
-          ],
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  item.homeTeam.name,
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Text(
-                  'VS',
-                  style: TextStyle(color: Colors.white60, fontSize: 20),
-                ),
-              ),
-              Expanded(
-                child: Text(
-                  item.awayTeam.name,
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  _formatDate(item.kickoffAt),
-                  style: const TextStyle(color: Colors.white70, fontSize: 15),
-                ),
-              ),
+            const SizedBox(height: 10),
+            if (confidence != null)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
-                  color: _statusColor(item.status).withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(18),
+                  color: Colors.blue.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
-                  item.status,
-                  style: TextStyle(
-                    color: _statusColor(item.status),
-                    fontWeight: FontWeight.w700,
+                  'Confidence: ${confidence.toStringAsFixed(1)}%',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.blue,
                   ),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.04),
-              borderRadius: BorderRadius.circular(18),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'xG ${item.homeTeam.short.isNotEmpty ? item.homeTeam.short : item.homeTeam.name}',
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-                ),
-                Text(
-                  item.model.homeXg.toStringAsFixed(2),
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(width: 18),
-                Expanded(
-                  child: Text(
-                    'xG ${item.awayTeam.short.isNotEmpty ? item.awayTeam.short : item.awayTeam.name}',
-                    textAlign: TextAlign.right,
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  item.model.awayXg.toStringAsFixed(2),
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
-          const Text(
-            '1X2',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              _percentBox('1', item.markets.oneXTwo.home),
-              const SizedBox(width: 10),
-              _percentBox('X', item.markets.oneXTwo.draw),
-              const SizedBox(width: 10),
-              _percentBox('2', item.markets.oneXTwo.away),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              _smallMarketBox('GG', item.markets.btts.gg),
-              const SizedBox(width: 10),
-              _smallMarketBox('Over 2.5', item.markets.ou25.over25),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              _smallMarketBox('1X', item.markets.doubleChance.oneX),
-              const SizedBox(width: 10),
-              _smallMarketBox('X2', item.markets.doubleChance.xTwo),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-            decoration: BoxDecoration(
-              color: Colors.green.withOpacity(0.14),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.green.withOpacity(0.35)),
-            ),
-            child: Row(
-              children: [
-                const Text(
-                  '✨',
-                  style: TextStyle(fontSize: 22),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Top Pick: ${item.topPick.market} • ${item.topPick.confidence.toStringAsFixed(1)}%',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
-          _buildCorrectScores(item.markets.correctScoreTop),
-          const SizedBox(height: 18),
-          ExpansionTile(
-            tilePadding: EdgeInsets.zero,
-            collapsedIconColor: Colors.white70,
-            iconColor: Colors.white70,
-            title: const Text(
-              'Detalii model',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            children: [
-              const SizedBox(height: 8),
-              _detailRow('Model', item.model.type),
-              _detailRow('League avg home goals', item.model.avgHomeGoalsLeague.toStringAsFixed(2)),
-              _detailRow('League avg away goals', item.model.avgAwayGoalsLeague.toStringAsFixed(2)),
-              _detailRow('Home ELO', item.model.homeElo.toStringAsFixed(1)),
-              _detailRow('Away ELO', item.model.awayElo.toStringAsFixed(1)),
-              _detailRow('ELO diff', item.model.eloDiff.toStringAsFixed(1)),
-              if (item.analysis.summary.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    item.analysis.summary,
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-                ),
-              ],
-              if (item.analysis.notes.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                ...item.analysis.notes.map(
-                  (n) => Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('• ', style: TextStyle(color: Colors.white70)),
-                        Expanded(
-                          child: Text(
-                            n,
-                            style: const TextStyle(color: Colors.white70),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _detailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(color: Colors.white70),
+  Widget _buildTabContent({
+    required bool loading,
+    required String? error,
+    required List<dynamic> items,
+    required Future<void> Function() onReload,
+  }) {
+    if (loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'A apărut o eroare',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                error,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton(
+                onPressed: onReload,
+                child: const Text('Reîncarcă'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (items.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: onReload,
+        child: ListView(
+          children: const [
+            SizedBox(height: 160),
+            Center(
+              child: Text(
+                'Nu există date',
+                style: TextStyle(fontSize: 16),
+              ),
             ),
-          ),
-          Text(
-            value,
-            style: const TextStyle(fontWeight: FontWeight.w700),
-          ),
-        ],
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: onReload,
+      child: ListView.builder(
+        itemCount: items.length,
+        itemBuilder: (context, index) {
+          final raw = items[index];
+          if (raw is Map<String, dynamic>) {
+            return _buildPredictionCard(raw);
+          }
+          return const SizedBox.shrink();
+        },
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1220),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0B1220),
-        elevation: 0,
-        title: const Text('Sure Predict'),
-      ),
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: FutureBuilder<List<PredictionItem>>(
-          future: _future,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(
-                child: CircularProgressIndicator(),
-              );
-            }
-
-            if (snapshot.hasError) {
-              return ListView(
-                padding: const EdgeInsets.all(20),
-                children: [
-                  const SizedBox(height: 100),
-                  const Icon(Icons.error_outline, size: 52, color: Colors.redAccent),
-                  const SizedBox(height: 14),
-                  const Text(
-                    'A apărut o eroare',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    snapshot.error.toString(),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-                  const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: _reload,
-                    child: const Text('Reîncarcă'),
-                  ),
-                ],
-              );
-            }
-
-            final items = snapshot.data ?? [];
-
-            if (items.isEmpty) {
-              return ListView(
-                padding: const EdgeInsets.all(20),
-                children: const [
-                  SizedBox(height: 100),
-                  Icon(Icons.sports_soccer, size: 52, color: Colors.white54),
-                  SizedBox(height: 14),
-                  Text(
-                    'Nu există predicții momentan',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              );
-            }
-
-            return ListView.builder(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.all(16),
-              itemCount: items.length,
-              itemBuilder: (context, index) {
-                return _buildPredictionCard(items[index]);
-              },
-            );
-          },
+        title: const Text('Predictions'),
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(text: 'All'),
+            Tab(text: 'Today'),
+            Tab(text: 'Top'),
+          ],
         ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildTabContent(
+            loading: _loadingAll,
+            error: _errorAll,
+            items: _allItems,
+            onReload: _loadAll,
+          ),
+          _buildTabContent(
+            loading: _loadingToday,
+            error: _errorToday,
+            items: _todayItems,
+            onReload: _loadToday,
+          ),
+          _buildTabContent(
+            loading: _loadingTop,
+            error: _errorTop,
+            items: _topItems,
+            onReload: _loadTop,
+          ),
+        ],
       ),
     );
   }

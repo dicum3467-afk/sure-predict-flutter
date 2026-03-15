@@ -95,7 +95,7 @@ class _DashboardTabState extends State<_DashboardTab> {
     try {
       final fixturesData = await _apiService.getFixtures(page: 1, perPage: 10);
       final topPicksData =
-          await _apiService.getTopPicksFromPredictions(limit: 5);
+          await _apiService.getTopPicks(limit: 5);
 
       if (!mounted) return;
 

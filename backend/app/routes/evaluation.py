@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import os
+
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.core.queue import queue
 from app.jobs.evaluation_job import run_evaluation_and_calibration_job
-from app.services.predictions_engine import MODEL_VERSION
 
 router = APIRouter(prefix="/evaluation", tags=["Evaluation"])
 
 SYNC_TOKEN = os.getenv("SYNC_TOKEN", "surepredict123")
+MODEL_VERSION = "disabled-temporarily"
 
 
 @router.post("/admin-run")

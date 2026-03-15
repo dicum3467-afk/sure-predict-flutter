@@ -1,379 +1,236 @@
 import 'package:flutter/material.dart';
 
 class MatchAnalysisScreen extends StatelessWidget {
-  final Map<String, dynamic> match;
+  final dynamic fixture;
 
-  const MatchAnalysisScreen({
-    super.key,
-    required this.match,
-  });
+  const MatchAnalysisScreen(this.fixture, {super.key});
 
-  double _fakeConfidence(String home, String away) {
-    final total = home.length + away.length;
-    return 50 + (total % 21).toDouble();
+  double _readProb(List<String> paths) {
+    dynamic current = fixture;
+
+    for (final key in paths) {
+      if (current is Map<String, dynamic>) {
+        current = current[key];
+      } else {
+        return 0;
+      }
+    }
+
+    if (current is num) return current.toDouble();
+    return 0;
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final home = match["home_team"]?["name"] ?? "Home";
-    final away = match["away_team"]?["name"] ?? "Away";
-    final league = match["league_name"] ?? "-";
-    final kickoff = match["kickoff_at"] ?? "-";
-    final status = match["status"] ?? "-";
+  String _teamName(String side) {
+    final team = fixture['${side}_team'];
+    if (team is Map<String, dynamic>) {
+      return (team['name'] ?? '').toString();
+    }
+    return side == 'home' ? 'Home' : 'Away';
+  }
 
-    final homeWin = _fakeConfidence(home, away).clamp(45, 68);
-    final draw = 24.0;
-    final awayWin = (100 - homeWin - draw).clamp(10, 35);
+  String _leagueName() => (fixture['league_name'] ?? '').toString();
 
-    final ggYes = ((home.length * 3 + away.length * 2) % 35 + 45).toDouble();
-    final over25 = ((home.length * 4 + away.length) % 30 + 48).toDouble();
+  String _kickoff() => (fixture['kickoff_at'] ?? '').toString();
 
-    final topPick = homeWin >= ggYes && homeWin >= over25
-        ? "1"
-        : ggYes >= over25
-            ? "GG"
-            : "Over 2.5";
+  Widget _probBar(String label, double value, {Color? color}) {
+    final safeValue = value.clamp(0, 100).toDouble();
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Match Analysis"),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Text(
+              '${safeValue.toStringAsFixed(1)}%',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: LinearProgressIndicator(
+            minHeight: 12,
+            value: safeValue / 100,
+            backgroundColor: Colors.white12,
+            valueColor: AlwaysStoppedAnimation<Color>(
+              color ?? Colors.lightBlueAccent,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _infoCard(String title, String value) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B22),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      child: Column(
         children: [
-          _HeaderCard(
-            league: league.toString(),
-            kickoff: kickoff.toString(),
-            status: status.toString(),
-            home: home.toString(),
-            away: away.toString(),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white60,
+              fontSize: 12,
+            ),
           ),
-          const SizedBox(height: 16),
-          _SectionTitle("Top prediction"),
-          _TopPickCard(
-            pick: topPick,
-            confidence: topPick == "1"
-                ? homeWin
-                : topPick == "GG"
-                    ? ggYes
-                    : over25,
-          ),
-          const SizedBox(height: 16),
-          _SectionTitle("1X2 probabilities"),
-          _ProbabilityCard(
-            title: "Home Win",
-            value: homeWin,
-          ),
-          _ProbabilityCard(
-            title: "Draw",
-            value: draw,
-          ),
-          _ProbabilityCard(
-            title: "Away Win",
-            value: awayWin,
-          ),
-          const SizedBox(height: 16),
-          _SectionTitle("Goals markets"),
-          _ProbabilityCard(
-            title: "GG",
-            value: ggYes,
-          ),
-          _ProbabilityCard(
-            title: "Over 2.5",
-            value: over25,
-          ),
-          _ProbabilityCard(
-            title: "Under 2.5",
-            value: (100 - over25).clamp(5, 95),
-          ),
-          const SizedBox(height: 16),
-          _SectionTitle("Quick analysis"),
-          _InfoCard(
-            title: "Form summary",
-            text:
-                "$home pare ușor favorit pe baza analizei demo. $away rămâne periculos și are șanse bune să marcheze.",
-          ),
-          _InfoCard(
-            title: "Goals expectation",
-            text:
-                "Meciul are profil moderat spre ofensiv. GG și Over 2.5 sunt piețe bune pentru monitorizare.",
-          ),
-          _InfoCard(
-            title: "Best use",
-            text:
-                "Folosește acest ecran ca bază UI. După aceea îl conectăm la endpoint real de predictions din backend.",
+          const SizedBox(height: 6),
+          Text(
+            value,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 15,
+            ),
           ),
         ],
       ),
     );
   }
-}
-
-class _HeaderCard extends StatelessWidget {
-  final String league;
-  final String kickoff;
-  final String status;
-  final String home;
-  final String away;
-
-  const _HeaderCard({
-    required this.league,
-    required this.kickoff,
-    required this.status,
-    required this.home,
-    required this.away,
-  });
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              league,
-              style: const TextStyle(
-                fontSize: 14,
-                color: Colors.white70,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    home,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12),
-                  child: Text(
-                    "vs",
-                    style: TextStyle(
-                      fontSize: 18,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: Text(
-                    away,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  kickoff,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.withOpacity(0.18),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    status,
-                    style: const TextStyle(
-                      color: Colors.lightBlueAccent,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            )
-          ],
+    final homeName = _teamName('home');
+    final awayName = _teamName('away');
+
+    final homeWin = (_readProb(['model', 'probs', '1x2', '1']) * 100).toDouble();
+    final draw = (_readProb(['model', 'probs', '1x2', 'X']) * 100).toDouble();
+    final awayWin = (_readProb(['model', 'probs', '1x2', '2']) * 100).toDouble();
+    final gg = (_readProb(['model', 'probs', 'gg', 'GG']) * 100).toDouble();
+    final over25 = (_readProb(['model', 'probs', 'ou25', 'O2.5']) * 100).toDouble();
+
+    final homeXg = _readProb(['model', 'home_xg']);
+    final awayXg = _readProb(['model', 'away_xg']);
+    final avgGoalsLeague = _readProb(['model', 'avg_goals_league']);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F1720),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0F1720),
+        elevation: 0,
+        title: const Text(
+          'Match Analysis',
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
       ),
-    );
-  }
-}
-
-class _TopPickCard extends StatelessWidget {
-  final String pick;
-  final double confidence;
-
-  const _TopPickCard({
-    required this.pick,
-    required this.confidence,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Row(
-          children: [
-            Container(
-              width: 68,
-              height: 68,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.22),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                pick,
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "Best Pick",
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    "${confidence.toStringAsFixed(1)}% confidence",
-                    style: const TextStyle(
-                      color: Colors.white70,
-                    ),
-                  ),
-                ],
-              ),
-            )
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ProbabilityCard extends StatelessWidget {
-  final String title;
-  final double value;
-
-  const _ProbabilityCard({
-    required this.title,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final progress = (value / 100).clamp(0.0, 1.0);
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: Padding(
+      body: ListView(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: const Color(0xFF161B22),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
               children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
                 Text(
-                  "${value.toStringAsFixed(1)}%",
+                  _leagueName(),
+                  textAlign: TextAlign.center,
                   style: const TextStyle(
-                    fontWeight: FontWeight.bold,
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
-                )
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '$homeName vs $awayName',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _kickoff(),
+                  style: const TextStyle(
+                    color: Colors.lightBlueAccent,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ],
             ),
-            const SizedBox(height: 10),
-            LinearProgressIndicator(
-              value: progress,
-              minHeight: 8,
-              borderRadius: BorderRadius.circular(10),
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            '1X2 Probabilities',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _InfoCard extends StatelessWidget {
-  final String title;
-  final String text;
-
-  const _InfoCard({
-    required this.title,
-    required this.text,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
+          ),
+          const SizedBox(height: 14),
+          _probBar('$homeName win', homeWin.toDouble(), color: Colors.greenAccent),
+          const SizedBox(height: 14),
+          _probBar('Draw', draw.toDouble(), color: Colors.orangeAccent),
+          const SizedBox(height: 14),
+          _probBar('$awayName win', awayWin.toDouble(), color: Colors.redAccent),
+          const SizedBox(height: 22),
+          const Text(
+            'Goals Markets',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 14),
+          _probBar('GG', gg.toDouble(), color: Colors.purpleAccent),
+          const SizedBox(height: 14),
+          _probBar('Over 2.5', over25.toDouble(), color: Colors.cyanAccent),
+          const SizedBox(height: 14),
+          _probBar('Under 2.5', (100 - over25).toDouble(), color: Colors.tealAccent),
+          const SizedBox(height: 22),
+          const Text(
+            'Model Stats',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _infoCard(
+                  'Home xG',
+                  homeXg.toStringAsFixed(2),
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              text,
-              style: const TextStyle(
-                color: Colors.white70,
-                height: 1.5,
+              const SizedBox(width: 12),
+              Expanded(
+                child: _infoCard(
+                  'Away xG',
+                  awayXg.toStringAsFixed(2),
+                ),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SectionTitle extends StatelessWidget {
-  final String text;
-
-  const _SectionTitle(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Text(
-        text,
-        style: const TextStyle(
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-        ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _infoCard(
+            'League Avg Goals',
+            avgGoalsLeague.toStringAsFixed(2),
+          ),
+        ],
       ),
     );
   }

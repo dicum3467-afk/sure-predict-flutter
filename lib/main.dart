@@ -24,7 +24,7 @@ class SurePredictApp extends StatelessWidget {
         colorSchemeSeed: Colors.blue,
         scaffoldBackgroundColor: const Color(0xFF0B1220),
       ),
-      home: const FixturesScreen(),
+      home: const HomeScreen(),
     );
   }
 }

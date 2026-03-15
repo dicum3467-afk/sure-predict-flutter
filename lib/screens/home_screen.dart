@@ -4,6 +4,9 @@ import '../services/api_service.dart';
 import '../widgets/fixture_card.dart';
 import '../widgets/section_title.dart';
 import '../widgets/top_pick_card.dart';
+import 'fixtures_screen.dart';
+import 'predictions_screen.dart';
+import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -13,6 +16,61 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  int _selectedIndex = 0;
+
+  final List<Widget> _pages = const [
+    _DashboardTab(),
+    FixturesScreen(),
+    PredictionsScreen(),
+    ProfileScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: _pages[_selectedIndex],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _selectedIndex,
+        onDestinationSelected: (index) {
+          setState(() {
+            _selectedIndex = index;
+          });
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.sports_soccer_outlined),
+            selectedIcon: Icon(Icons.sports_soccer),
+            label: 'Fixtures',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.analytics_outlined),
+            selectedIcon: Icon(Icons.analytics),
+            label: 'Predictions',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: 'Profile',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DashboardTab extends StatefulWidget {
+  const _DashboardTab();
+
+  @override
+  State<_DashboardTab> createState() => _DashboardTabState();
+}
+
+class _DashboardTabState extends State<_DashboardTab> {
   final ApiService _apiService = ApiService();
 
   bool isLoading = true;
@@ -36,13 +94,16 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadData() async {
     try {
       final fixturesData = await _apiService.getFixtures(page: 1, perPage: 10);
-      final topPicksData = await _apiService.getTopPicksFromPredictions(limit: 5);
+      final topPicksData =
+          await _apiService.getTopPicksFromPredictions(limit: 5);
 
       if (!mounted) return;
+
       setState(() {
         fixtures = fixturesData.take(5).toList();
         topPicks = topPicksData;
         isLoading = false;
+        error = null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -80,9 +141,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Text(
                         _greeting(),
-                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                              fontWeight: FontWeight.w800,
-                            ),
+                        style: Theme.of(context)
+                            .textTheme
+                            .headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w800),
                       ),
                       const SizedBox(height: 4),
                       Text(

@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes.value import router as value_router
 from app.routes.predictions import router as predictions_router
+from app.routes.fixtures_sync import router as fixtures_router
+
 
 app = FastAPI(
     title="Sure Predict Backend",
@@ -29,6 +31,7 @@ app.add_middleware(
 
 app.include_router(value_router)
 app.include_router(predictions_router)
+app.include_router(fixtures_router)
 
 
 @app.get("/", tags=["Meta"])

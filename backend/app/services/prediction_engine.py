@@ -4,35 +4,38 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.services.calibration import PlattBinary, PlattOVR
+MODEL_VERSION = "engine_pro_pp"
 
-MODEL_VERSION = "poisson_v2_mega_pro+++++"
-
-# ----- helpers -----
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
+
 def _clamp_p(p: float, eps: float = 1e-6) -> float:
     return max(eps, min(1.0 - eps, p))
 
+
 def _poisson_pmf(lam: float, k: int) -> float:
+    lam = max(0.0001, lam)
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
 
+
 def _score_matrix(lam_home: float, lam_away: float, max_goals: int = 10) -> List[List[float]]:
-    mat = []
+    mat: List[List[float]] = []
     for i in range(max_goals + 1):
-        row = []
-        p_i = _poisson_pmf(lam_home, i)
+        row: List[float] = []
+        pi = _poisson_pmf(lam_home, i)
         for j in range(max_goals + 1):
-            row.append(p_i * _poisson_pmf(lam_away, j))
+            row.append(pi * _poisson_pmf(lam_away, j))
         mat.append(row)
+
     s = sum(sum(r) for r in mat)
     if s > 0:
         for i in range(len(mat)):
             for j in range(len(mat[i])):
                 mat[i][j] /= s
     return mat
+
 
 def _sum_region(mat: List[List[float]], cond) -> float:
     s = 0.0
@@ -42,49 +45,77 @@ def _sum_region(mat: List[List[float]], cond) -> float:
                 s += mat[i][j]
     return s
 
+
 def _top_scorelines(mat: List[List[float]], topn: int = 7) -> List[Dict[str, Any]]:
-    items = []
+    items: List[Tuple[float, int, int]] = []
     for i in range(len(mat)):
         for j in range(len(mat[i])):
             items.append((mat[i][j], i, j))
     items.sort(reverse=True, key=lambda t: t[0])
-    out = []
+
+    out: List[Dict[str, Any]] = []
     for p, i, j in items[:topn]:
-        out.append({"home": i, "away": j, "p": round(p, 6)})
+        out.append(
+            {
+                "home_goals": i,
+                "away_goals": j,
+                "p": round(p, 6),
+            }
+        )
     return out
+
 
 def _odds_from_prob(p: float) -> Optional[float]:
     if p <= 0:
         return None
     return round(1.0 / p, 2)
 
-def _pick_from_probs(probs: Dict[str, float]) -> Dict[str, Any]:
-    best_k = max(probs.keys(), key=lambda k: probs[k])
-    return {"pick": best_k, "p": round(probs[best_k], 6), "odds_fair": _odds_from_prob(probs[best_k])}
 
-# ----- model core -----
+def _pick_from_probs(probs: Dict[str, float]) -> Dict[str, Any]:
+    if not probs:
+        return {"pick": None, "p": 0.0, "odds_fair": None}
+
+    best_key = max(probs.keys(), key=lambda k: probs[k])
+    best_p = float(probs[best_key])
+    return {
+        "pick": best_key,
+        "p": round(best_p, 6),
+        "odds_fair": _odds_from_prob(best_p),
+    }
+
 
 @dataclass
 class TeamStrength:
     attack: float
     defense: float
 
+
 def compute_team_strengths(
     matches: List[Dict[str, Any]],
     team_id: int,
-    *,
     half_life_matches: float = 20.0,
 ) -> Tuple[float, float, float]:
+    """
+    Returnează:
+    - avg goals scored ponderat
+    - avg goals conceded ponderat
+    - suma ponderilor
+    """
     w_sum = 0.0
     s_scored = 0.0
     s_conceded = 0.0
+
     n = len(matches)
     for idx, m in enumerate(matches):
         age = (n - 1 - idx)
         w = math.exp(-math.log(2) * (age / max(1e-6, half_life_matches)))
 
-        h = int(m["home_team_id"])
-        a = int(m["away_team_id"])
+        try:
+            h = int(m["home_team_id"])
+            a = int(m["away_team_id"])
+        except Exception:
+            continue
+
         hg = int(m.get("home_goals") or 0)
         ag = int(m.get("away_goals") or 0)
 
@@ -102,13 +133,20 @@ def compute_team_strengths(
     if w_sum <= 0:
         return 0.0, 0.0, 0.0
 
-    return (s_scored / w_sum), (s_conceded / w_sum), w_sum
+    return s_scored / w_sum, s_conceded / w_sum, w_sum
 
-def strengths_from_form(team_scored_avg: float, team_conceded_avg: float, league_scored_avg: float) -> TeamStrength:
-    league_scored_avg = max(0.8, league_scored_avg)
+
+def strengths_from_form(
+    team_scored_avg: float,
+    team_conceded_avg: float,
+    league_scored_avg: float,
+) -> TeamStrength:
+    league_scored_avg = max(0.2, league_scored_avg)
+
     attack = _clamp(team_scored_avg / league_scored_avg, 0.6, 1.6)
     defense = _clamp(team_conceded_avg / league_scored_avg, 0.6, 1.6)
     return TeamStrength(attack=attack, defense=defense)
+
 
 def build_expected_goals(
     league_avg_goals: float,
@@ -118,6 +156,9 @@ def build_expected_goals(
     home_adv: float = 1.10,
     shrink: float = 0.65,
 ) -> Tuple[float, float, Dict[str, Any]]:
+    """
+    Produce lambda_home și lambda_away.
+    """
     base = max(0.2, league_avg_goals / 2.0)
 
     ha = 1.0 + shrink * (home_strength.attack - 1.0)
@@ -144,6 +185,7 @@ def build_expected_goals(
         "lambda_away": round(lam_away, 4),
     }
     return lam_home, lam_away, inputs
+
 
 def predict_markets_raw(lam_home: float, lam_away: float) -> Dict[str, Any]:
     mat = _score_matrix(lam_home, lam_away, max_goals=10)
@@ -179,59 +221,118 @@ def predict_markets_raw(lam_home: float, lam_away: float) -> Dict[str, Any]:
         "A/D": p_ht_a * p_draw,
         "A/A": p_ht_a * p_away,
     }
+
     s = sum(htft.values())
     if s > 0:
         for k in list(htft.keys()):
             htft[k] /= s
 
     return {
-        "1x2": {"1": p_home, "X": p_draw, "2": p_away},
-        "double_chance": {"1X": p_1x, "X2": p_x2, "12": p_12},
-        "gg": {"GG": p_gg, "NG": 1.0 - p_gg},
-        "ou25": {"O2.5": p_o25, "U2.5": p_u25},
-        "ht": {"HT1": p_ht_h, "HTX": p_ht_d, "HT2": p_ht_a},
+        "1x2": {
+            "1": p_home,
+            "X": p_draw,
+            "2": p_away,
+        },
+        "double_chance": {
+            "1X": p_1x,
+            "X2": p_x2,
+            "12": p_12,
+        },
+        "gg": {
+            "GG": p_gg,
+            "NG": 1.0 - p_gg,
+        },
+        "ou25": {
+            "O2.5": p_o25,
+            "U2.5": p_u25,
+        },
+        "ht": {
+            "HT1": p_ht_h,
+            "HTX": p_ht_d,
+            "HT2": p_ht_a,
+        },
         "htft": htft,
         "top_scorelines": _top_scorelines(mat, topn=7),
     }
 
+
+class PlattBinary:
+    """
+    Calibrare simplă pentru piețe binare.
+    Momentan fallback liniar-identitate dacă nu ai parametri antrenați.
+    """
+
+    def __init__(self, a: float = 1.0, b: float = 0.0):
+        self.a = a
+        self.b = b
+
+    def apply(self, p: float) -> float:
+        p = _clamp_p(float(p))
+        logit = math.log(p / (1.0 - p))
+        z = self.a * logit + self.b
+        out = 1.0 / (1.0 + math.exp(-z))
+        return _clamp_p(out)
+
+
+class PlattOVR:
+    """
+    Calibrare multiclasă one-vs-rest.
+    primește dict cu probabilități și întoarce dict recalibrat.
+    """
+
+    def __init__(self, class_params: Optional[Dict[str, Tuple[float, float]]] = None):
+        self.class_params = class_params or {}
+
+    def apply_probs(self, probs: Dict[str, float]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for k, v in probs.items():
+            a, b = self.class_params.get(k, (1.0, 0.0))
+            p = _clamp_p(float(v))
+            logit = math.log(p / (1.0 - p))
+            z = a * logit + b
+            out[k] = _clamp_p(1.0 / (1.0 + math.exp(-z)))
+
+        s = sum(out.values())
+        if s > 0:
+            out = {k: _clamp_p(v / s) for k, v in out.items()}
+        return out
+
+
 def _apply_calibration(
     probs: Dict[str, Any],
     *,
-    cal_binary: Dict[str, PlattBinary] | None = None,
-    cal_ovr: PlattOVR | None = None,
+    cal_binary: Optional[Dict[str, PlattBinary]] = None,
+    cal_ovr: Optional[PlattOVR] = None,
 ) -> Dict[str, Any]:
     """
-    Applies:
-      - binary calibration to gg(GG) and ou25(O2.5) (and keeps complements)
-      - ovr calibration to 1x2
+    Aplică:
+    - calibrare binară la GG și O/U2.5
+    - calibrare OVR la 1x2
     """
     cal_binary = cal_binary or {}
 
-    # GG
     if "gg" in probs and "GG" in probs["gg"] and "gg" in cal_binary:
         p = float(probs["gg"]["GG"])
         p2 = cal_binary["gg"].apply(p)
         probs["gg"]["GG"] = p2
         probs["gg"]["NG"] = 1.0 - p2
 
-    # O2.5
     if "ou25" in probs and "O2.5" in probs["ou25"] and "ou25" in cal_binary:
         p = float(probs["ou25"]["O2.5"])
         p2 = cal_binary["ou25"].apply(p)
         probs["ou25"]["O2.5"] = p2
         probs["ou25"]["U2.5"] = 1.0 - p2
 
-    # 1X2 (OVR shared)
     if cal_ovr is not None and "1x2" in probs:
         probs["1x2"] = cal_ovr.apply_probs({k: float(v) for k, v in probs["1x2"].items()})
 
-    # re-clamp + renorm for 1x2 just in case
     if "1x2" in probs:
         s = sum(probs["1x2"].values())
         if s > 0:
             probs["1x2"] = {k: _clamp_p(v / s) for k, v in probs["1x2"].items()}
 
     return probs
+
 
 def compute_prediction_for_fixture(
     fixture: Dict[str, Any],
@@ -240,14 +341,27 @@ def compute_prediction_for_fixture(
     league_avg_goals: float,
     league_scored_avg: float,
     home_adv: float = 1.10,
-    cal_binary: Dict[str, PlattBinary] | None = None,
-    cal_ovr: PlattOVR | None = None,
+    cal_binary: Optional[Dict[str, PlattBinary]] = None,
+    cal_ovr: Optional[PlattOVR] = None,
 ) -> Dict[str, Any]:
+    """
+    fixture trebuie să conțină:
+    - home_team_id
+    - away_team_id
+    """
     home_id = int(fixture["home_team_id"])
     away_id = int(fixture["away_team_id"])
 
-    h_sc, h_conc, h_w = compute_team_strengths(past_matches, home_id, half_life_matches=20.0)
-    a_sc, a_conc, a_w = compute_team_strengths(past_matches, away_id, half_life_matches=20.0)
+    h_sc, h_conc, h_w = compute_team_strengths(
+        past_matches,
+        home_id,
+        half_life_matches=20.0,
+    )
+    a_sc, a_conc, a_w = compute_team_strengths(
+        past_matches,
+        away_id,
+        half_life_matches=20.0,
+    )
 
     if h_w <= 0:
         h_sc, h_conc = league_scored_avg, league_scored_avg
@@ -266,7 +380,11 @@ def compute_prediction_for_fixture(
     )
 
     probs = predict_markets_raw(lam_home, lam_away)
-    probs = _apply_calibration(probs, cal_binary=cal_binary, cal_ovr=cal_ovr)
+    probs = _apply_calibration(
+        probs,
+        cal_binary=cal_binary,
+        cal_ovr=cal_ovr,
+    )
 
     picks = {
         "1x2": _pick_from_probs(probs["1x2"]),
@@ -274,10 +392,10 @@ def compute_prediction_for_fixture(
         "gg": _pick_from_probs(probs["gg"]),
         "ou25": _pick_from_probs(probs["ou25"]),
         "ht": _pick_from_probs(probs["ht"]),
-        "htft": _pick_from_probs(probs["htft"]),
     }
 
-    confidence = max(probs["1x2"].values())
+    confidence = max(probs["1x2"].values()) if probs.get("1x2") else 0.0
+
     metrics = {
         "confidence_1x2": round(confidence, 6),
         "lambda_home": inputs["lambda_home"],

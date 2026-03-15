@@ -40,21 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(admin_router)
-app.include_router(admin_hub_router)
-# app.include_router(evaluation_router)
-app.include_router(fixtures_router)
-app.include_router(fixtures_by_league_router)
-app.include_router(fixtures_sync_router)
-app.include_router(job_router)
-# app.include_router(leagues_router)
-app.include_router(leagues_sync_router)
-# app.include_router(odds_router)
-app.include_router(predictions_router)
-app.include_router(team_stats_router)
-app.include_router(teams_router)
-app.include_router(teams_sync_router)
-# app.include_router(value_router)
+app.include_router(value_router)
 
 
 @app.get("/", tags=["Meta"])

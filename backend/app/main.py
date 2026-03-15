@@ -5,7 +5,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes.value import router as value_router
+from app.routes.predictions import router as predictions_router
 
 app = FastAPI(
     title="Sure Predict Backend",
@@ -26,7 +26,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(value_router)
+app.include_router(predictions_router)
+
 
 @app.get("/", tags=["Meta"])
 def root():
@@ -35,6 +36,7 @@ def root():
         "service": "sure-predict-backend",
         "version": app.version,
     }
+
 
 @app.get("/health", tags=["Meta"])
 def health():

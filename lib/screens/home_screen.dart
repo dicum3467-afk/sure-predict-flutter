@@ -93,7 +93,7 @@ class _DashboardTabState extends State<_DashboardTab> {
 
   Future<void> _loadData() async {
     try {
-      final fixturesData = await _apiService.getFixtures(page: 1, perPage: 10);
+      final fixturesData = await _apiService.fetchFixtures(page: 1, perPage: 10);
       final topPicksData =
           await _apiService.getTopPicks(limit: 5);
 

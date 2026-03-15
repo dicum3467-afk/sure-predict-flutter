@@ -1,28 +1,10 @@
-from __future__ import annotations
-
 import os
-from contextlib import contextmanager
+from supabase import create_client, Client
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
+supabase_client: Client | None = None
 
-@contextmanager
-def get_conn():
-    dsn = os.getenv("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL is missing")
-
-    conn = psycopg2.connect(dsn)
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-def dict_cursor(conn):
-    return conn.cursor(cursor_factory=RealDictCursor)
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)

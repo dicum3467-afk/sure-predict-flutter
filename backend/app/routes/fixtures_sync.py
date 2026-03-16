@@ -13,15 +13,17 @@ router = APIRouter(prefix="/fixtures", tags=["Fixtures Sync"])
 
 SYNC_TOKEN = os.getenv("SYNC_TOKEN", "surepredict123")
 
-# API-Sports direct
+# RapidAPI
 FOOTBALL_API_BASE_URL = os.getenv(
     "FOOTBALL_API_BASE_URL",
-    "https://v3.football.api-sports.io",
+    "https://api-football-v1.p.rapidapi.com/v3",
+)
+FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "")
+FOOTBALL_API_HOST = os.getenv(
+    "FOOTBALL_API_HOST",
+    "api-football-v1.p.rapidapi.com",
 )
 
-FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "")
-
-# Ligi default
 DEFAULT_LEAGUES = [
     39,   # Premier League
     140,  # La Liga
@@ -41,13 +43,13 @@ def _utc_now() -> datetime:
 
 
 def _default_season(today: datetime) -> int:
-    # sezon european: iulie -> anul curent, altfel anul precedent
     return today.year if today.month >= 7 else today.year - 1
 
 
 def _api_headers() -> Dict[str, str]:
     return {
-        "x-apisports-key": FOOTBALL_API_KEY, 
+        "x-rapidapi-key": FOOTBALL_API_KEY,
+        "x-rapidapi-host": FOOTBALL_API_HOST,
     }
 
 
@@ -62,7 +64,7 @@ def _api_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     resp = requests.get(url, headers=_api_headers(), params=params, timeout=45)
 
     if resp.status_code >= 400:
-        text = resp.text[:300] if resp.text else ""
+        text = resp.text[:500] if resp.text else ""
         raise HTTPException(
             status_code=500,
             detail=f"Football API error {resp.status_code}: {text}",
@@ -73,7 +75,6 @@ def _api_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="Raspuns invalid de la Football API")
 
     return data
-
 
 def _fetch_fixtures_for_league(
     league_provider_id: int,

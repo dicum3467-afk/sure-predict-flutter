@@ -18,8 +18,8 @@ FOOTBALL_API_BASE_URL = os.getenv(
     "FOOTBALL_API_BASE_URL",
     "https://v3.football.api-sports.io",
 )
-
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "")
+FOOTBALL_API_HOST = os.getenv("FOOTBALL_API_HOST", "v3.football.api-sports.io")
 
 DEFAULT_LEAGUES = [
     39,   # Premier League
@@ -42,11 +42,19 @@ def _utc_now() -> datetime:
 def _api_headers() -> Dict[str, str]:
     return {
         "x-apisports-key": FOOTBALL_API_KEY,
+        "x-rapidapi-key": FOOTBALL_API_KEY,
+        "x-rapidapi-host": FOOTBALL_API_HOST,
     }
 
 
 @router.get("/debug-status")
 def debug_status() -> Dict[str, Any]:
+    if not FOOTBALL_API_KEY:
+        return {
+            "status_code": 500,
+            "response": "FOOTBALL_API_KEY lipsește",
+        }
+
     url = f"{FOOTBALL_API_BASE_URL.rstrip('/')}/status"
     resp = requests.get(url, headers=_api_headers(), timeout=30)
 
@@ -105,7 +113,6 @@ def _fetch_fixtures_for_league(
                 "season": season,
                 "from": date_from,
                 "to": date_to,
-                "status": "NS",
                 "page": page,
             },
         )
@@ -154,7 +161,6 @@ def _extract_fixture_row(item: Dict[str, Any]) -> Dict[str, Any]:
 
     home = teams.get("home", {}) or {}
     away = teams.get("away", {}) or {}
-
     status_block = fixture.get("status", {}) or {}
 
     return {
@@ -184,8 +190,8 @@ def admin_sync_fixtures(
     days_ahead: int = Query(14, ge=1, le=90),
     past_days: int = Query(7, ge=0, le=90),
     season: Optional[int] = Query(None),
-    max_pages: int = Query(5, ge=1, le=10),
-    season_lookback: int = Query(0, ge=0, le=5),
+    max_pages: int = Query(5, ge=1, le=20),
+    season_lookback: int = Query(1, ge=0, le=5),
     x_sync_token: str | None = Header(None, alias="X-Sync-Token"),
 ) -> Dict[str, Any]:
     if x_sync_token != SYNC_TOKEN:
@@ -247,6 +253,7 @@ def admin_sync_fixtures(
 
             except Exception as e:
                 errors.append(f"league {league_provider_id} season {season_try}: {e}")
+                time.sleep(1.5)
 
         if not league_had_rows:
             skipped += 1
@@ -263,5 +270,5 @@ def admin_sync_fixtures(
         "skipped": skipped,
         "errors_count": len(errors),
         "errors_preview": errors[:10],
-        "debug_preview": debug_preview[:10],
+        "debug_preview": debug_preview[:20],
     }

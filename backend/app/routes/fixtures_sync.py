@@ -271,4 +271,4 @@ def admin_sync_fixtures(
         "errors_count": len(errors),
         "errors_preview": errors[:10],
         "debug_preview": debug_preview[:20],
-    }
+        }

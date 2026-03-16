@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import requests
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -13,17 +13,15 @@ router = APIRouter(prefix="/fixtures", tags=["Fixtures Sync"])
 
 SYNC_TOKEN = os.getenv("SYNC_TOKEN", "surepredict123")
 
-# RapidAPI
+# API SPORTS
 FOOTBALL_API_BASE_URL = os.getenv(
     "FOOTBALL_API_BASE_URL",
-    "https://api-football-v1.p.rapidapi.com/v3",
-)
-FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "")
-FOOTBALL_API_HOST = os.getenv(
-    "FOOTBALL_API_HOST",
-    "api-football-v1.p.rapidapi.com",
+    "https://v3.football.api-sports.io"
 )
 
+FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "")
+
+# ligi importante
 DEFAULT_LEAGUES = [
     39,   # Premier League
     140,  # La Liga
@@ -38,382 +36,149 @@ DEFAULT_LEAGUES = [
 ]
 
 
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _default_season(today: datetime) -> int:
-    return today.year if today.month >= 7 else today.year - 1
-
-
 def _api_headers() -> Dict[str, str]:
     return {
-        "x-rapidapi-key": FOOTBALL_API_KEY,
-        "x-rapidapi-host": FOOTBALL_API_HOST,
+        "x-apisports-key": FOOTBALL_API_KEY
     }
 
 
 def _api_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+
     if not FOOTBALL_API_KEY:
         raise HTTPException(
             status_code=500,
-            detail="FOOTBALL_API_KEY lipseste din environment variables",
+            detail="FOOTBALL_API_KEY lipseste"
         )
 
-    url = f"{FOOTBALL_API_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
-    resp = requests.get(url, headers=_api_headers(), params=params, timeout=45)
+    url = f"{FOOTBALL_API_BASE_URL}/{path}"
+
+    resp = requests.get(
+        url,
+        headers=_api_headers(),
+        params=params,
+        timeout=30
+    )
 
     if resp.status_code >= 400:
-        text = resp.text[:500] if resp.text else ""
         raise HTTPException(
             status_code=500,
-            detail=f"Football API error {resp.status_code}: {text}",
+            detail=f"Football API error {resp.status_code}: {resp.text}"
         )
 
-    data = resp.json()
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=500, detail="Raspuns invalid de la Football API")
-
-    return data
-
-def _fetch_fixtures_for_league(
-    league_provider_id: int,
-    season: int,
-    date_from: str,
-    date_to: str,
-    max_pages: int,
-) -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
-    page = 1
-
-    while page <= max_pages:
-        payload = _api_get(
-            "/fixtures",
-            {
-                "league": league_provider_id,
-                "season": season,
-                "from": date_from,
-                "to": date_to,
-                "page": page,
-            },
-        )
-
-        response_items = payload.get("response", []) or []
-        paging = payload.get("paging", {}) or {}
-        current = int(paging.get("current", page) or page)
-        total = int(paging.get("total", 1) or 1)
-
-        items.extend(response_items)
-
-        if current >= total:
-            break
-
-        page += 1
-
-    return items
+    return resp.json()
 
 
-def _get_team_name(team_payload: Dict[str, Any], fallback: str) -> str:
-    return (
-        team_payload.get("name")
-        or team_payload.get("short_name")
-        or team_payload.get("code")
-        or fallback
-    )
+def _extract_fixture_row(data: Dict[str, Any]):
 
-
-def _ensure_team(team_payload: Dict[str, Any]) -> str:
-    provider_team_id = str(team_payload.get("id") or "").strip()
-    if not provider_team_id:
-        raise HTTPException(status_code=500, detail="Lipseste provider team id")
-
-    existing = (
-        supabase_client.table("teams")
-        .select("id")
-        .eq("provider_team_id", provider_team_id)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if existing:
-        return existing[0]["id"]
-
-    row = {
-        "provider_team_id": provider_team_id,
-        "name": _get_team_name(team_payload, f"Team {provider_team_id}"),
-        "short_name": team_payload.get("code") or _get_team_name(team_payload, ""),
-        "country": team_payload.get("country"),
-        "logo_url": team_payload.get("logo"),
-    }
-
-    inserted = (
-        supabase_client.table("teams")
-        .insert(row)
-        .execute()
-        .data
-        or []
-    )
-    if inserted:
-        return inserted[0]["id"]
-
-    retry = (
-        supabase_client.table("teams")
-        .select("id")
-        .eq("provider_team_id", provider_team_id)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if retry:
-        return retry[0]["id"]
-
-    raise HTTPException(status_code=500, detail="Nu pot salva echipa in teams")
-
-
-def _ensure_league(league_payload: Dict[str, Any], season: Optional[int]) -> str:
-    provider_league_id = str(league_payload.get("id") or "").strip()
-    if not provider_league_id:
-        raise HTTPException(status_code=500, detail="Lipseste provider league id")
-
-    existing = (
-        supabase_client.table("leagues")
-        .select("id")
-        .eq("provider_league_id", provider_league_id)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if existing:
-        league_id = existing[0]["id"]
-        update_data = {
-            "name": league_payload.get("name"),
-            "country": league_payload.get("country"),
-            "logo_url": league_payload.get("logo"),
-            "type": league_payload.get("type"),
-            "season": season,
-            "is_active": True,
-        }
-        supabase_client.table("leagues").update(update_data).eq("id", league_id).execute()
-        return league_id
-
-    row = {
-        "provider_league_id": provider_league_id,
-        "name": league_payload.get("name"),
-        "country": league_payload.get("country"),
-        "logo_url": league_payload.get("logo"),
-        "type": league_payload.get("type"),
-        "season": season,
-        "is_active": True,
-    }
-
-    inserted = (
-        supabase_client.table("leagues")
-        .insert(row)
-        .execute()
-        .data
-        or []
-    )
-    if inserted:
-        return inserted[0]["id"]
-
-    retry = (
-        supabase_client.table("leagues")
-        .select("id")
-        .eq("provider_league_id", provider_league_id)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if retry:
-        return retry[0]["id"]
-
-    raise HTTPException(status_code=500, detail="Nu pot salva liga in leagues")
-
-
-def _extract_fixture_row(payload: Dict[str, Any], season: int) -> Dict[str, Any]:
-    fixture = payload.get("fixture", {}) or {}
-    league = payload.get("league", {}) or {}
-    teams = payload.get("teams", {}) or {}
-
-    home = teams.get("home", {}) or {}
-    away = teams.get("away", {}) or {}
-
-    home_team_id = _ensure_team(home)
-    away_team_id = _ensure_team(away)
-    league_id = _ensure_league(league, season)
-
-    provider_fixture_id = str(fixture.get("id") or "").strip()
-    if not provider_fixture_id:
-        raise HTTPException(status_code=500, detail="Lipseste provider fixture id")
-
-    kickoff_at = fixture.get("date")
-    if not kickoff_at:
-        raise HTTPException(status_code=500, detail="Lipseste kickoff date")
-
-    status_info = fixture.get("status", {}) or {}
-    goals = payload.get("goals", {}) or {}
+    fixture = data["fixture"]
+    teams = data["teams"]
+    goals = data["goals"]
+    league = data["league"]
 
     return {
-        "provider_fixture_id": provider_fixture_id,
-        "season_id": season,
-        "league_id": league_id,
-        "home_team_id": home_team_id,
-        "away_team_id": away_team_id,
-        "kickoff_at": kickoff_at,
-        "round": league.get("round"),
-        "status": status_info.get("short") or status_info.get("long") or "NS",
-        "home_goals": goals.get("home"),
-        "away_goals": goals.get("away"),
+        "fixture_id": fixture["id"],
+        "league_id": league["id"],
+        "league_name": league["name"],
+        "season": league["season"],
+        "home_team_id": teams["home"]["id"],
+        "home_team": teams["home"]["name"],
+        "away_team_id": teams["away"]["id"],
+        "away_team": teams["away"]["name"],
+        "kickoff": fixture["date"],
+        "status": fixture["status"]["short"],
+        "home_goals": goals["home"],
+        "away_goals": goals["away"],
     }
 
 
-def _upsert_fixture(row: Dict[str, Any]) -> str:
-    existing = (
-        supabase_client.table("fixtures")
-        .select("id")
-        .eq("provider_fixture_id", row["provider_fixture_id"])
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
+def _upsert_fixture(row: Dict[str, Any]):
 
-    if existing:
-        fixture_id = existing[0]["id"]
-        supabase_client.table("fixtures").update(row).eq("id", fixture_id).execute()
-        return fixture_id
+    supabase_client.table("fixtures").upsert(
+        row,
+        on_conflict="fixture_id"
+    ).execute()
 
-    inserted = (
-        supabase_client.table("fixtures")
-        .insert(row)
-        .execute()
-        .data
-        or []
-    )
 
-    if inserted:
-        return inserted[0]["id"]
+def _fetch_fixtures_for_league(
+    league_id: int,
+    season: int,
+    from_date: str,
+    to_date: str,
+):
 
-    retry = (
-        supabase_client.table("fixtures")
-        .select("id")
-        .eq("provider_fixture_id", row["provider_fixture_id"])
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if retry:
-        return retry[0]["id"]
+    params = {
+        "league": league_id,
+        "season": season,
+        "from": from_date,
+        "to": to_date,
+    }
 
-    raise HTTPException(status_code=500, detail="Nu pot salva fixture in fixtures")
+    data = _api_get("fixtures", params)
+
+    return data.get("response", [])
 
 
 @router.post("/admin-sync")
 def admin_sync_fixtures(
-    days_ahead: int = Query(14, ge=1, le=90),
-    past_days: int = Query(7, ge=0, le=90),
-    season: Optional[int] = Query(None),
+    days_ahead: int = Query(30, ge=1, le=90),
+    past_days: int = Query(30, ge=0, le=90),
+    season: int | None = Query(None),
     max_pages: int = Query(10, ge=1, le=50),
     season_lookback: int = Query(2, ge=0, le=5),
-    x_sync_token: str | None = Header(None, alias="X-Sync-Token"),
+    x_sync_token: str = Header(None)
 ):
+
     if x_sync_token != SYNC_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=403, detail="Invalid token")
 
-    now = _utc_now()
-    active_season = season or _default_season(now)
+    now = datetime.now(timezone.utc)
 
-    date_from = (now - timedelta(days=past_days)).date().isoformat()
-    date_to = (now + timedelta(days=days_ahead)).date().isoformat()
+    start_date = (now - timedelta(days=past_days)).date().isoformat()
+    end_date = (now + timedelta(days=days_ahead)).date().isoformat()
 
-    leagues_done = 0
-    seasons_to_try = [active_season - i for i in range(season_lookback + 1)]
     inserted = 0
     updated = 0
     skipped = 0
+
     errors: List[str] = []
-    debug_rows: List[Dict[str, Any]] = []
 
-    for league_provider_id in DEFAULT_LEAGUES:
-        league_had_rows = False
+    if season is None:
+        season = now.year
 
-        for season_try in seasons_to_try:
+    seasons_to_try = [season - i for i in range(season_lookback + 1)]
+
+    for league in DEFAULT_LEAGUES:
+
+        for s in seasons_to_try:
+
             try:
-                fixtures_rows = _fetch_fixtures_for_league(
-                    league_provider_id=league_provider_id,
-                    season=season_try,
-                    date_from=date_from,
-                    date_to=date_to,
-                    max_pages=max_pages,
+
+                fixtures = _fetch_fixtures_for_league(
+                    league,
+                    s,
+                    start_date,
+                    end_date
                 )
 
-                debug_rows.append(
-                    {
-                        "league": league_provider_id,
-                        "season": season_try,
-                        "count": len(fixtures_rows),
-                    }
-                )
+                for f in fixtures:
 
-                if not fixtures_rows:
-                    continue
+                    row = _extract_fixture_row(f)
 
-                league_had_rows = True
+                    _upsert_fixture(row)
 
-                for item in fixtures_rows:
-                    try:
-                        row = _extract_fixture_row(item, season_try)
+                    inserted += 1
 
-                        existed = (
-                            supabase_client.table("fixtures")
-                            .select("id")
-                            .eq("provider_fixture_id", row["provider_fixture_id"])
-                            .limit(1)
-                            .execute()
-                            .data
-                            or []
-                        )
+            except Exception as e:
 
-                        _upsert_fixture(row)
-
-                        if existed:
-                            updated += 1
-                        else:
-                            inserted += 1
-
-                    except Exception as ex:
-                        skipped += 1
-                        errors.append(
-                            f"league {league_provider_id} season {season_try}: save error: {str(ex)}"
-                        )
-
-                break
-
-            except Exception as ex:
-                errors.append(
-                    f"league {league_provider_id} season {season_try}: {str(ex)}"
-                )
-
-        if league_had_rows:
-            leagues_done += 1
+                errors.append(f"league {league} season {s}: {str(e)}")
 
     return {
         "ok": True,
-        "leagues": leagues_done,
+        "from": start_date,
+        "to": end_date,
         "inserted": inserted,
         "updated": updated,
         "skipped": skipped,
-        "from": date_from,
-        "to": date_to,
-        "season": active_season,
-        "seasons_tried": seasons_to_try,
-        "max_pages": max_pages,
         "errors_count": len(errors),
         "errors_preview": errors[:10],
-        "debug_preview": debug_rows[:30],
-        }
+    }

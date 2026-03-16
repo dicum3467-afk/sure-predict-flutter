@@ -86,21 +86,30 @@ def _api_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
+from datetime import datetime, timedelta
+
 def _fetch_fixtures_for_league(
     league_id: int,
     season: int,
     next_count: int = 20,
     max_pages: int = 3,
 ) -> List[Dict[str, Any]]:
+
     items: List[Dict[str, Any]] = []
     page = 1
 
+    today = datetime.utcnow().date()
+    to_date = today + timedelta(days=14)
+
     while page <= max_pages:
+
         payload = _api_get(
             "/fixtures",
             {
                 "league": league_id,
                 "season": season,
+                "from": str(today),
+                "to": str(to_date),
                 "status": "NS",
                 "page": page,
             },
@@ -108,6 +117,7 @@ def _fetch_fixtures_for_league(
 
         response_items = payload.get("response", []) or []
         paging = payload.get("paging", {}) or {}
+
         current = int(paging.get("current", page) or page)
         total = int(paging.get("total", 1) or 1)
 

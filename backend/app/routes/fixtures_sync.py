@@ -101,7 +101,7 @@ def _fetch_fixtures_for_league(
             {
                 "league": league_id,
                 "season": season,
-                "next": next_count,
+                "status": "NS",
                 "page": page,
             },
         )

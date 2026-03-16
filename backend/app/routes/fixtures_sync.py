@@ -98,27 +98,27 @@ def _api_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
 def _fetch_fixtures_for_league(
     league_id: int,
     season: int,
-    date_from: str,
-    date_to: str,
-    max_pages: int = 5,
+    max_pages: int = 3,
 ) -> List[Dict[str, Any]]:
+
     items: List[Dict[str, Any]] = []
     page = 1
 
     while page <= max_pages:
+
         payload = _api_get(
             "/fixtures",
             {
                 "league": league_id,
                 "season": season,
-                "from": date_from,
-                "to": date_to,
+                "next": 20,
                 "page": page,
             },
         )
 
         response_items = payload.get("response", []) or []
         paging = payload.get("paging", {}) or {}
+
         current = int(paging.get("current", page) or page)
         total = int(paging.get("total", 1) or 1)
 
@@ -131,7 +131,6 @@ def _fetch_fixtures_for_league(
         time.sleep(1.2)
 
     return items
-
 
 def _ensure_league(league_block: Dict[str, Any]) -> None:
     league_id = league_block.get("id")

@@ -218,8 +218,6 @@ def admin_sync_fixtures(
                 fixtures = _fetch_fixtures_for_league(
                     league_id=league_provider_id,
                     season=season_try,
-                    date_from=date_from,
-                    date_to=date_to,
                     max_pages=max_pages,
                 )
 

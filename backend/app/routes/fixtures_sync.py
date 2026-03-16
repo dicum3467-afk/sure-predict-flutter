@@ -15,8 +15,10 @@ SYNC_TOKEN = os.getenv("SYNC_TOKEN", "surepredict123")
 
 # API-Sports direct
 FOOTBALL_API_BASE_URL = os.getenv(
+    "FOOTBALL_API_BASE_URL",
     "https://v3.football.api-sports.io",
 )
+
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "")
 
 # Ligi default

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
@@ -15,28 +16,10 @@ SYNC_TOKEN = os.getenv("SYNC_TOKEN", "surepredict123")
 
 FOOTBALL_API_BASE_URL = os.getenv(
     "FOOTBALL_API_BASE_URL",
-    "https://v3.football.api-sports.io"
+    "https://v3.football.api-sports.io",
 )
-
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "")
-@router.get("/debug-status")
-def debug_status():
-    url = f"{FOOTBALL_API_BASE_URL}/status"
 
-    resp = requests.get(
-        url,
-        headers={
-            "x-apisports-key": FOOTBALL_API_KEY
-        },
-        timeout=30
-    )
-
-    return {
-        "status_code": resp.status_code,
-        "response": resp.text
-    }
-
-# ligi importante
 DEFAULT_LEAGUES = [
     39,   # Premier League
     140,  # La Liga
@@ -51,149 +34,255 @@ DEFAULT_LEAGUES = [
 ]
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _api_headers() -> Dict[str, str]:
     return {
-        "x-apisports-key": FOOTBALL_API_KEY
+        "x-apisports-key": FOOTBALL_API_KEY,
+    }
+
+
+@router.get("/debug-status")
+def debug_status():
+    url = f"{FOOTBALL_API_BASE_URL}/status"
+    resp = requests.get(url, headers=_api_headers(), timeout=30)
+    return {
+        "status_code": resp.status_code,
+        "response": resp.text,
     }
 
 
 def _api_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-
     if not FOOTBALL_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="FOOTBALL_API_KEY lipseste"
-        )
+        raise HTTPException(status_code=500, detail="FOOTBALL_API_KEY lipseste")
 
-    url = f"{FOOTBALL_API_BASE_URL}/{path}"
+    url = f"{FOOTBALL_API_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
 
     resp = requests.get(
         url,
         headers=_api_headers(),
         params=params,
-        timeout=30
+        timeout=30,
     )
+
+    if resp.status_code == 429:
+        raise HTTPException(
+            status_code=500,
+            detail="Football API error 429: Too many requests",
+        )
 
     if resp.status_code >= 400:
         raise HTTPException(
             status_code=500,
-            detail=f"Football API error {resp.status_code}: {resp.text}"
+            detail=f"Football API error {resp.status_code}: {resp.text}",
         )
 
-    return resp.json()
-
-
-def _extract_fixture_row(data: Dict[str, Any]):
-
-    fixture = data["fixture"]
-    teams = data["teams"]
-    goals = data["goals"]
-    league = data["league"]
-
-    return {
-        "fixture_id": fixture["id"],
-        "league_id": league["id"],
-        "league_name": league["name"],
-        "season": league["season"],
-        "home_team_id": teams["home"]["id"],
-        "home_team": teams["home"]["name"],
-        "away_team_id": teams["away"]["id"],
-        "away_team": teams["away"]["name"],
-        "kickoff": fixture["date"],
-        "status": fixture["status"]["short"],
-        "home_goals": goals["home"],
-        "away_goals": goals["away"],
-    }
-
-
-def _upsert_fixture(row: Dict[str, Any]):
-
-    supabase_client.table("fixtures").upsert(
-        row,
-        on_conflict="fixture_id"
-    ).execute()
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="Raspuns invalid de la Football API")
+    return data
 
 
 def _fetch_fixtures_for_league(
     league_id: int,
     season: int,
-    from_date: str,
-    to_date: str,
-):
+    date_from: str,
+    date_to: str,
+    max_pages: int,
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    page = 1
 
-    params = {
-        "league": league_id,
-        "season": season,
-        "from": from_date,
-        "to": to_date,
+    while page <= max_pages:
+        payload = _api_get(
+            "/fixtures",
+            {
+                "league": league_id,
+                "season": season,
+                "from": date_from,
+                "to": date_to,
+                "page": page,
+            },
+        )
+
+        response_items = payload.get("response", []) or []
+        paging = payload.get("paging", {}) or {}
+        current = int(paging.get("current", page) or page)
+        total = int(paging.get("total", 1) or 1)
+
+        items.extend(response_items)
+
+        if current >= total:
+            break
+
+        page += 1
+        time.sleep(1.2)  # pauză mică anti-429
+
+    return items
+
+
+def _get_team_name(team_block: Dict[str, Any]) -> str:
+    return str(team_block.get("name") or "").strip()
+
+
+def _ensure_league(league_block: Dict[str, Any]) -> None:
+    league_id = league_block.get("id")
+    if not league_id:
+        return
+
+    row = {
+        "provider_league_id": league_id,
+        "name": league_block.get("name"),
+        "country": league_block.get("country"),
+        "logo": league_block.get("logo"),
+        "is_active": True,
+        "updated_at": _utc_now().isoformat(),
     }
 
-    data = _api_get("fixtures", params)
+    supabase_client.table("leagues").upsert(
+        row,
+        on_conflict="provider_league_id",
+    ).execute()
 
-    return data.get("response", [])
+
+def _extract_fixture_row(item: Dict[str, Any]) -> Dict[str, Any]:
+    fixture = item.get("fixture", {}) or {}
+    league = item.get("league", {}) or {}
+    teams = item.get("teams", {}) or {}
+    goals = item.get("goals", {}) or {}
+
+    home = teams.get("home", {}) or {}
+    away = teams.get("away", {}) or {}
+    status = fixture.get("status", {}) or {}
+
+    return {
+        "fixture_id": fixture.get("id"),
+        "provider_fixture_id": fixture.get("id"),
+        "season": league.get("season"),
+        "league_id": league.get("id"),
+        "home_team_id": home.get("id"),
+        "away_team_id": away.get("id"),
+        "kickoff_at": fixture.get("date"),
+        "round": league.get("round"),
+        "status": status.get("short") or status.get("long"),
+        "home_goals": goals.get("home"),
+        "away_goals": goals.get("away"),
+        "created_at": _utc_now().isoformat(),
+    }
+
+
+def _upsert_fixture(row: Dict[str, Any]) -> None:
+    supabase_client.table("fixtures").upsert(
+        row,
+        on_conflict="provider_fixture_id",
+    ).execute()
 
 
 @router.post("/admin-sync")
 def admin_sync_fixtures(
-    days_ahead: int = Query(30, ge=1, le=90),
-    past_days: int = Query(30, ge=0, le=90),
+    days_ahead: int = Query(14, ge=1, le=90),
+    past_days: int = Query(7, ge=0, le=90),
     season: int | None = Query(None),
-    max_pages: int = Query(10, ge=1, le=50),
+    max_pages: int = Query(5, ge=1, le=50),
     season_lookback: int = Query(2, ge=0, le=5),
-    x_sync_token: str = Header(None)
+    x_sync_token: str | None = Header(None, alias="X-Sync-Token"),
 ):
-
     if x_sync_token != SYNC_TOKEN:
-        raise HTTPException(status_code=403, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    now = datetime.now(timezone.utc)
+    now = _utc_now()
+    active_season = season or now.year
+    date_from = (now - timedelta(days=past_days)).date().isoformat()
+    date_to = (now + timedelta(days=days_ahead)).date().isoformat()
 
-    start_date = (now - timedelta(days=past_days)).date().isoformat()
-    end_date = (now + timedelta(days=days_ahead)).date().isoformat()
+    seasons_to_try = [active_season - i for i in range(season_lookback + 1)]
 
+    leagues_done = 0
     inserted = 0
     updated = 0
     skipped = 0
-
     errors: List[str] = []
+    debug_preview: List[Dict[str, Any]] = []
 
-    if season is None:
-        season = now.year
+    for league_provider_id in DEFAULT_LEAGUES:
+        league_had_rows = False
 
-    seasons_to_try = [season - i for i in range(season_lookback + 1)]
-
-    for league in DEFAULT_LEAGUES:
-
-        for s in seasons_to_try:
-
+        for season_try in seasons_to_try:
             try:
-
                 fixtures = _fetch_fixtures_for_league(
-                    league,
-                    s,
-                    start_date,
-                    end_date
+                    league_id=league_provider_id,
+                    season=season_try,
+                    date_from=date_from,
+                    date_to=date_to,
+                    max_pages=max_pages,
                 )
 
-                for f in fixtures:
+                debug_preview.append(
+                    {
+                        "league": league_provider_id,
+                        "season": season_try,
+                        "count": len(fixtures),
+                    }
+                )
 
-                    row = _extract_fixture_row(f)
+                if not fixtures:
+                    time.sleep(1.2)
+                    continue
+
+                for item in fixtures:
+                    league_block = item.get("league", {}) or {}
+                    _ensure_league(league_block)
+
+                    row = _extract_fixture_row(item)
+                    if not row.get("provider_fixture_id"):
+                        skipped += 1
+                        continue
 
                     _upsert_fixture(row)
-
                     inserted += 1
+                    league_had_rows = True
+
+                leagues_done += 1
+                time.sleep(1.2)
+                break
 
             except Exception as e:
+                errors.append(f"league {league_provider_id} season {season_try}: {e}")
+                time.sleep(2.0)
 
-                errors.append(f"league {league} season {s}: {str(e)}")
+                if "429" in str(e):
+                    return {
+                        "ok": False,
+                        "reason": "rate_limited",
+                        "from": date_from,
+                        "to": date_to,
+                        "season": active_season,
+                        "seasons_tried": seasons_to_try,
+                        "leagues": leagues_done,
+                        "inserted": inserted,
+                        "updated": updated,
+                        "skipped": skipped,
+                        "errors_count": len(errors),
+                        "errors_preview": errors[:10],
+                        "debug_preview": debug_preview[:10],
+                    }
+
+        if not league_had_rows:
+            skipped += 1
 
     return {
         "ok": True,
-        "from": start_date,
-        "to": end_date,
+        "from": date_from,
+        "to": date_to,
+        "season": active_season,
+        "seasons_tried": seasons_to_try,
+        "leagues": leagues_done,
         "inserted": inserted,
         "updated": updated,
         "skipped": skipped,
         "errors_count": len(errors),
         "errors_preview": errors[:10],
+        "debug_preview": debug_preview[:10],
     }

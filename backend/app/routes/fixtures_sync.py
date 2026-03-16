@@ -18,7 +18,6 @@ FOOTBALL_API_BASE_URL = os.getenv(
     "https://v3.football.api-sports.io",
 )
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "")
-FOOTBALL_API_HOST = os.getenv("FOOTBALL_API_HOST", "v3.football.api-sports.io")
 
 # Ligi default
 DEFAULT_LEAGUES = [
@@ -46,9 +45,7 @@ def _default_season(today: datetime) -> int:
 
 def _api_headers() -> Dict[str, str]:
     return {
-        "x-apisports-key": FOOTBALL_API_KEY,
-        "x-rapidapi-key": FOOTBALL_API_KEY,
-        "x-rapidapi-host": FOOTBALL_API_HOST,
+        "x-apisports-key": FOOTBALL_API_KEY, 
     }
 
 

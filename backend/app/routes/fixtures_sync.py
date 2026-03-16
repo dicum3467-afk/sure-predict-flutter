@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -46,9 +46,10 @@ def _api_headers() -> Dict[str, str]:
 
 
 @router.get("/debug-status")
-def debug_status():
+def debug_status() -> Dict[str, Any]:
     url = f"{FOOTBALL_API_BASE_URL.rstrip('/')}/status"
     resp = requests.get(url, headers=_api_headers(), timeout=30)
+
     return {
         "status_code": resp.status_code,
         "response": resp.text,
@@ -86,14 +87,12 @@ def _api_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
-from datetime import datetime, timedelta
-
 def _fetch_fixtures_for_league(
     league_id: int,
     season: int,
     date_from: str,
     date_to: str,
-    max_pages: int = 3,
+    max_pages: int = 5,
 ) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     page = 1
@@ -147,24 +146,6 @@ def _ensure_league(league_block: Dict[str, Any]) -> None:
     ).execute()
 
 
-def _ensure_team(team_block: Dict[str, Any]) -> None:
-    team_id = team_block.get("id")
-    if not team_id:
-        return
-
-    row = {
-        "provider_team_id": team_id,
-        "name": team_block.get("name"),
-        "logo": team_block.get("logo"),
-        "updated_at": _utc_now().isoformat(),
-    }
-
-    supabase_client.table("teams").upsert(
-        row,
-        on_conflict="provider_team_id",
-    ).execute()
-
-
 def _extract_fixture_row(item: Dict[str, Any]) -> Dict[str, Any]:
     fixture = item.get("fixture", {}) or {}
     league = item.get("league", {}) or {}
@@ -200,16 +181,22 @@ def _upsert_fixture(row: Dict[str, Any]) -> None:
 
 @router.post("/admin-sync")
 def admin_sync_fixtures(
+    days_ahead: int = Query(14, ge=1, le=90),
+    past_days: int = Query(7, ge=0, le=90),
     season: Optional[int] = Query(None),
-    max_pages: int = Query(3, ge=1, le=10),
-    next_count: int = Query(20, ge=1, le=50),
+    max_pages: int = Query(5, ge=1, le=10),
+    season_lookback: int = Query(0, ge=0, le=5),
     x_sync_token: str | None = Header(None, alias="X-Sync-Token"),
-):
+) -> Dict[str, Any]:
     if x_sync_token != SYNC_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     now = _utc_now()
     active_season = season or (now.year if now.month >= 7 else now.year - 1)
+
+    date_from = (now - timedelta(days=past_days)).date().isoformat()
+    date_to = (now + timedelta(days=days_ahead)).date().isoformat()
+    seasons_to_try = [active_season - i for i in range(season_lookback + 1)]
 
     leagues_done = 0
     inserted = 0
@@ -219,67 +206,57 @@ def admin_sync_fixtures(
     debug_preview: List[Dict[str, Any]] = []
 
     for league_provider_id in DEFAULT_LEAGUES:
-        try:
-            fixtures = _fetch_fixtures_for_league(
-                league_id=league_provider_id,
-                season=active_season,
-                next_count=next_count,
-                max_pages=max_pages,
-            )
+        league_had_rows = False
 
-            debug_preview.append(
-                {
-                    "league": league_provider_id,
-                    "season": active_season,
-                    "count": len(fixtures),
-                }
-            )
+        for season_try in seasons_to_try:
+            try:
+                fixtures = _fetch_fixtures_for_league(
+                    league_id=league_provider_id,
+                    season=season_try,
+                    date_from=date_from,
+                    date_to=date_to,
+                    max_pages=max_pages,
+                )
 
-            if not fixtures:
-                skipped += 1
-                time.sleep(1.2)
-                continue
+                debug_preview.append(
+                    {
+                        "league": league_provider_id,
+                        "season": season_try,
+                        "count": len(fixtures),
+                    }
+                )
 
-            for item in fixtures:
-                league_block = item.get("league", {}) or {}
-                teams_block = item.get("teams", {}) or {}
-
-                _ensure_league(league_block)
-                _ensure_team(teams_block.get("home", {}) or {})
-                _ensure_team(teams_block.get("away", {}) or {})
-
-                row = _extract_fixture_row(item)
-                if not row.get("provider_fixture_id"):
-                    skipped += 1
+                if not fixtures:
                     continue
 
-                _upsert_fixture(row)
-                inserted += 1
+                for item in fixtures:
+                    league_block = item.get("league", {}) or {}
+                    _ensure_league(league_block)
 
-            leagues_done += 1
-            time.sleep(1.2)
+                    row = _extract_fixture_row(item)
+                    if not row.get("provider_fixture_id"):
+                        skipped += 1
+                        continue
 
-        except Exception as e:
-            errors.append(f"league {league_provider_id}: {e}")
-            time.sleep(2.0)
+                    _upsert_fixture(row)
+                    inserted += 1
+                    league_had_rows = True
 
-            if "429" in str(e):
-                return {
-                    "ok": False,
-                    "reason": "rate_limited",
-                    "season": active_season,
-                    "leagues": leagues_done,
-                    "inserted": inserted,
-                    "updated": updated,
-                    "skipped": skipped,
-                    "errors_count": len(errors),
-                    "errors_preview": errors[:10],
-                    "debug_preview": debug_preview[:10],
-                }
+                leagues_done += 1
+                break
+
+            except Exception as e:
+                errors.append(f"league {league_provider_id} season {season_try}: {e}")
+
+        if not league_had_rows:
+            skipped += 1
 
     return {
         "ok": True,
+        "from": date_from,
+        "to": date_to,
         "season": active_season,
+        "seasons_tried": seasons_to_try,
         "leagues": leagues_done,
         "inserted": inserted,
         "updated": updated,

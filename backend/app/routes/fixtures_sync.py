@@ -11,6 +11,26 @@ from app.db import supabase_client
 
 router = APIRouter(prefix="/fixtures", tags=["Fixtures Sync"])
 
+router = APIRouter(prefix="/fixtures", tags=["Fixtures Sync"])
+
+
+@router.get("/debug-status")
+def debug_status():
+    url = f"{FOOTBALL_API_BASE_URL}/status"
+
+    resp = requests.get(
+        url,
+        headers={
+            "x-apisports-key": FOOTBALL_API_KEY
+        },
+        timeout=30
+    )
+
+    return {
+        "status_code": resp.status_code,
+        "response": resp.text
+    }
+
 SYNC_TOKEN = os.getenv("SYNC_TOKEN", "surepredict123")
 
 # API SPORTS

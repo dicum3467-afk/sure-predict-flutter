@@ -101,15 +101,30 @@ def _fetch_next_fixtures_for_league(
     season: int,
     next_count: int = 10,
 ) -> List[Dict[str, Any]]:
-    payload = _api_get(
-        "/fixtures",
-        {
-            "league": league_id,
-            "season": season,
-            "next": next_count,
-        },
-    )
-    return payload.get("response", []) or []
+
+    fixtures: List[Dict[str, Any]] = []
+
+    for page in range(1, 4):  # max 3 pagini
+        payload = _api_get(
+            "/fixtures",
+            {
+                "league": league_id,
+                "season": season,
+                "status": "NS",   # 🔥 FIXUL IMPORTANT
+                "page": page,
+            },
+        )
+
+        data = payload.get("response", [])
+        if not data:
+            break
+
+        fixtures.extend(data)
+
+        if len(fixtures) >= next_count:
+            return fixtures[:next_count]
+
+    return fixtures[:next_count]
 
 
 def _ensure_league(league_block: Dict[str, Any]) -> None:

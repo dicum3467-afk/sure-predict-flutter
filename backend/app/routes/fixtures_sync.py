@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -69,6 +69,7 @@ def _api_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="FOOTBALL_API_KEY lipsește")
 
     url = f"{FOOTBALL_API_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
+
     resp = requests.get(
         url,
         headers=_api_headers(),
@@ -95,42 +96,21 @@ def _api_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
-def _fetch_fixtures_for_league(
+def _fetch_next_fixtures_for_league(
     league_id: int,
     season: int,
-    max_pages: int = 3,
+    next_count: int = 10,
 ) -> List[Dict[str, Any]]:
+    payload = _api_get(
+        "/fixtures",
+        {
+            "league": league_id,
+            "season": season,
+            "next": next_count,
+        },
+    )
+    return payload.get("response", []) or []
 
-    items: List[Dict[str, Any]] = []
-    page = 1
-
-    while page <= max_pages:
-
-        payload = _api_get(
-            "/fixtures",
-            {
-                "league": league_id,
-                "season": season,
-                "next": 20,
-                "page": page,
-            },
-        )
-
-        response_items = payload.get("response", []) or []
-        paging = payload.get("paging", {}) or {}
-
-        current = int(paging.get("current", page) or page)
-        total = int(paging.get("total", 1) or 1)
-
-        items.extend(response_items)
-
-        if current >= total:
-            break
-
-        page += 1
-        time.sleep(1.2)
-
-    return items
 
 def _ensure_league(league_block: Dict[str, Any]) -> None:
     league_id = league_block.get("id")
@@ -186,11 +166,8 @@ def _upsert_fixture(row: Dict[str, Any]) -> None:
 
 @router.post("/admin-sync")
 def admin_sync_fixtures(
-    days_ahead: int = Query(14, ge=1, le=90),
-    past_days: int = Query(7, ge=0, le=90),
     season: Optional[int] = Query(None),
-    max_pages: int = Query(5, ge=1, le=20),
-    season_lookback: int = Query(1, ge=0, le=5),
+    next_count: int = Query(10, ge=1, le=20),
     x_sync_token: str | None = Header(None, alias="X-Sync-Token"),
 ) -> Dict[str, Any]:
     if x_sync_token != SYNC_TOKEN:
@@ -198,10 +175,6 @@ def admin_sync_fixtures(
 
     now = _utc_now()
     active_season = season or (now.year if now.month >= 7 else now.year - 1)
-
-    date_from = (now - timedelta(days=past_days)).date().isoformat()
-    date_to = (now + timedelta(days=days_ahead)).date().isoformat()
-    seasons_to_try = [active_season - i for i in range(season_lookback + 1)]
 
     leagues_done = 0
     inserted = 0
@@ -211,56 +184,48 @@ def admin_sync_fixtures(
     debug_preview: List[Dict[str, Any]] = []
 
     for league_provider_id in DEFAULT_LEAGUES:
-        league_had_rows = False
+        try:
+            fixtures = _fetch_next_fixtures_for_league(
+                league_id=league_provider_id,
+                season=active_season,
+                next_count=next_count,
+            )
 
-        for season_try in seasons_to_try:
-            try:
-                fixtures = _fetch_fixtures_for_league(
-                    league_id=league_provider_id,
-                    season=season_try,
-                    max_pages=max_pages,
-                )
+            debug_preview.append(
+                {
+                    "league": league_provider_id,
+                    "season": active_season,
+                    "count": len(fixtures),
+                }
+            )
 
-                debug_preview.append(
-                    {
-                        "league": league_provider_id,
-                        "season": season_try,
-                        "count": len(fixtures),
-                    }
-                )
+            if not fixtures:
+                skipped += 1
+                time.sleep(1.0)
+                continue
 
-                if not fixtures:
+            for item in fixtures:
+                league_block = item.get("league", {}) or {}
+                _ensure_league(league_block)
+
+                row = _extract_fixture_row(item)
+                if not row.get("provider_fixture_id"):
+                    skipped += 1
                     continue
 
-                for item in fixtures:
-                    league_block = item.get("league", {}) or {}
-                    _ensure_league(league_block)
+                _upsert_fixture(row)
+                inserted += 1
 
-                    row = _extract_fixture_row(item)
-                    if not row.get("provider_fixture_id"):
-                        skipped += 1
-                        continue
+            leagues_done += 1
+            time.sleep(1.0)
 
-                    _upsert_fixture(row)
-                    inserted += 1
-                    league_had_rows = True
-
-                leagues_done += 1
-                break
-
-            except Exception as e:
-                errors.append(f"league {league_provider_id} season {season_try}: {e}")
-                time.sleep(1.5)
-
-        if not league_had_rows:
-            skipped += 1
+        except Exception as e:
+            errors.append(f"league {league_provider_id}: {e}")
+            time.sleep(1.5)
 
     return {
         "ok": True,
-        "from": date_from,
-        "to": date_to,
         "season": active_season,
-        "seasons_tried": seasons_to_try,
         "leagues": leagues_done,
         "inserted": inserted,
         "updated": updated,
@@ -268,4 +233,4 @@ def admin_sync_fixtures(
         "errors_count": len(errors),
         "errors_preview": errors[:10],
         "debug_preview": debug_preview[:20],
-        }
+    }

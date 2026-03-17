@@ -1,8 +1,8 @@
-name: Daily Sync
+name: Safe Sync
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -10,25 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
+      - name: Call backend safe sync
         run: |
-          cd backend
-          pip install -r requirements.txt
-
-      - name: Run daily sync
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-          APISPORTS_KEY: ${{ secrets.APISPORTS_KEY }}
-          API_KEY: ${{ secrets.API_KEY }}
-        run: |
-          cd backend
-          python -m app.jobs.run_daily_sync
+          curl -X POST "https://sure-predict-backend.onrender.com/fixtures/admin-sync?season=2025&next_count=10&days_ahead=7&past_days=3" \
+            -H "X-Sync-Token: surepredict123"

@@ -104,13 +104,14 @@ def _fetch_next_fixtures_for_league(
 
     fixtures: List[Dict[str, Any]] = []
 
-    for page in range(1, 4):  # max 3 pagini
+    for page in range(1, 4):
         payload = _api_get(
             "/fixtures",
             {
                 "league": league_id,
                 "season": season,
-                "status": "NS",   # 🔥 FIXUL IMPORTANT
+                "status": "NS",
+                "from": datetime.now(timezone.utc).date().isoformat(),
                 "page": page,
             },
         )
